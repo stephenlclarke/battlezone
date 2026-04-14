@@ -11,6 +11,9 @@ const SHELL_SPEED: f32 = 48.0;
 const SHELL_LIFETIME: f32 = 2.2;
 const ENEMY_RADIUS: f32 = 2.0;
 const ENEMY_RESPAWN_TIME: f32 = 2.5;
+const ENEMY_RESPAWN_RETRY_TIME: f32 = 0.25;
+const ENEMY_SPAWN_ATTEMPTS: usize = 32;
+const ENEMY_SPAWN_STEP: f32 = 0.5;
 const WORLD_LIMIT: f32 = 70.0;
 
 const CUBE_VERTICES: [Vec3; 8] = [
@@ -359,12 +362,16 @@ impl Game {
         if !self.enemy.alive {
             self.enemy_respawn_timer -= dt;
             if self.enemy_respawn_timer <= 0.0 {
-                self.enemy = Enemy {
-                    position: spawn_enemy_position(self.time),
-                    heading: PI,
-                    alive: true,
-                    pulse: 0.0,
-                };
+                if let Some(position) = self.find_enemy_spawn_position(self.time) {
+                    self.enemy = Enemy {
+                        position,
+                        heading: PI,
+                        alive: true,
+                        pulse: 0.0,
+                    };
+                } else {
+                    self.enemy_respawn_timer = ENEMY_RESPAWN_RETRY_TIME;
+                }
             }
             return;
         }
@@ -402,6 +409,18 @@ impl Game {
         !self.obstacles.iter().any(|obstacle| {
             horizontal_distance(candidate, obstacle.position) <= obstacle.radius + ENEMY_RADIUS
         })
+    }
+
+    fn find_enemy_spawn_position(&self, start_time: f32) -> Option<Vec3> {
+        for attempt in 0..ENEMY_SPAWN_ATTEMPTS {
+            let sample_time = start_time + attempt as f32 * ENEMY_SPAWN_STEP;
+            let candidate = spawn_enemy_position(sample_time);
+            if self.position_is_enemy_safe(candidate) {
+                return Some(candidate);
+            }
+        }
+
+        None
     }
 
     fn push_ground_bounds(&self, lines: &mut Vec<WorldLine>) {
@@ -536,5 +555,18 @@ mod tests {
         let a = Vec3::new(0.0, 0.0, 0.0);
         let b = Vec3::new(0.0, 0.0, ENEMY_RADIUS);
         assert!((horizontal_distance(a, b) - ENEMY_RADIUS).abs() < 0.001);
+    }
+
+    #[test]
+    fn enemy_respawn_chooses_safe_spawn_location() {
+        let mut game = Game::new();
+        game.enemy.alive = false;
+        game.enemy_respawn_timer = 0.0;
+        game.time = 184.83;
+
+        game.update_enemy(0.0);
+
+        assert!(game.enemy.alive);
+        assert!(game.position_is_enemy_safe(game.enemy.position));
     }
 }

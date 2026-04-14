@@ -1,4 +1,4 @@
-use std::io::{Stdout, Write};
+use std::io::{IsTerminal, Stdout, Write};
 
 use anyhow::{Result, bail};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
@@ -31,17 +31,14 @@ impl KittyGraphics {
 
     pub fn ensure_supported() -> Result<()> {
         let term = std::env::var("TERM").unwrap_or_default();
-        let kitty_window_id = std::env::var("KITTY_WINDOW_ID").unwrap_or_default();
+        let term_program = std::env::var("TERM_PROGRAM").unwrap_or_default();
         let force = std::env::var("BATTLEZONE_FORCE_KITTY").unwrap_or_default();
 
-        if force == "1" || !kitty_window_id.is_empty() || term.contains("kitty") {
+        if force == "1" || is_known_kitty_graphics_terminal(&term, &term_program) {
             return Ok(());
         }
 
-        bail!(
-            "Kitty graphics protocol was requested, but this terminal does not look like kitty. \
-             Run inside kitty or set BATTLEZONE_FORCE_KITTY=1 to bypass the check."
-        )
+        validate_environment(&term, std::io::stdout().is_terminal())
     }
 
     pub fn resize(&mut self, placement_cols: u16, placement_rows: u16) {
@@ -80,6 +77,29 @@ impl KittyGraphics {
     }
 }
 
+fn is_known_kitty_graphics_terminal(term: &str, term_program: &str) -> bool {
+    term == "xterm-ghostty" || term_program == "ghostty" || term_program == "WarpTerminal"
+}
+
+fn validate_environment(term: &str, is_terminal: bool) -> Result<()> {
+    if !is_terminal {
+        bail!(
+            "Kitty graphics output requires an interactive terminal on stdout. \
+             Run inside kitty or another terminal that supports the protocol."
+        );
+    }
+
+    if term.is_empty() || term == "dumb" {
+        bail!(
+            "TERM={term:?} does not expose the interactive terminal capabilities needed for \
+             Kitty graphics. Run inside kitty or another compatible terminal, or set \
+             BATTLEZONE_FORCE_KITTY=1 to bypass this basic check."
+        );
+    }
+
+    Ok(())
+}
+
 fn encode_png(image: &RenderedImage) -> Result<Vec<u8>> {
     let mut encoded = Vec::new();
     {
@@ -95,7 +115,7 @@ fn encode_png(image: &RenderedImage) -> Result<Vec<u8>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{CHUNK_SIZE, encode_png};
+    use super::{CHUNK_SIZE, encode_png, is_known_kitty_graphics_terminal, validate_environment};
     use crate::render::RenderedImage;
 
     #[test]
@@ -113,5 +133,30 @@ mod tests {
     #[test]
     fn chunk_size_matches_protocol_limit() {
         assert_eq!(CHUNK_SIZE, 4_096);
+    }
+
+    #[test]
+    fn environment_check_allows_non_kitty_terminals() {
+        validate_environment("xterm-256color", true)
+            .expect("interactive compatible terminals should pass");
+    }
+
+    #[test]
+    fn environment_check_rejects_dumb_terminals() {
+        let result = validate_environment("dumb", true);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn known_ghostty_environment_skips_terminal_check() {
+        assert!(is_known_kitty_graphics_terminal("xterm-ghostty", "ghostty"));
+    }
+
+    #[test]
+    fn known_warp_environment_skips_terminal_check() {
+        assert!(is_known_kitty_graphics_terminal(
+            "xterm-256color",
+            "WarpTerminal"
+        ));
     }
 }

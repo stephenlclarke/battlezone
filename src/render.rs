@@ -10,8 +10,14 @@ const GROUND_FAR: Color = Color(6, 16, 6, 255);
 const HORIZON_COLOR: Color = Color(50, 120, 50, 255);
 const CROSSHAIR_COLOR: Color = Color(160, 255, 160, 255);
 
+type ProjectedPoint = (f32, f32);
 type ScreenPoint = (i32, i32);
 type ProjectedSegment = (ScreenPoint, ScreenPoint, f32);
+
+const OUT_LEFT: u8 = 0b0001;
+const OUT_RIGHT: u8 = 0b0010;
+const OUT_TOP: u8 = 0b0100;
+const OUT_BOTTOM: u8 = 0b1000;
 
 #[derive(Clone, Copy)]
 struct Color(u8, u8, u8, u8);
@@ -252,6 +258,8 @@ fn project_segment(
 
     let projected_start = project_point(start, width, height, focal)?;
     let projected_end = project_point(end, width, height, focal)?;
+    let (projected_start, projected_end) =
+        clip_to_viewport(projected_start, projected_end, width, height)?;
     let depth = (start.z + end.z) * 0.5;
     Some((projected_start, projected_end, depth))
 }
@@ -285,7 +293,7 @@ fn interpolate_to_near(behind: Vec3, front: Vec3) -> Vec3 {
     )
 }
 
-fn project_point(point: Vec3, width: u32, height: u32, focal: f32) -> Option<(i32, i32)> {
+fn project_point(point: Vec3, width: u32, height: u32, focal: f32) -> Option<ProjectedPoint> {
     if point.z <= NEAR_PLANE {
         return None;
     }
@@ -294,7 +302,102 @@ fn project_point(point: Vec3, width: u32, height: u32, focal: f32) -> Option<(i3
     let half_height = height as f32 * 0.5;
     let x = half_width + (point.x / point.z) * focal;
     let y = half_height - (point.y / point.z) * focal * 0.65;
-    Some((x.round() as i32, y.round() as i32))
+    Some((x, y))
+}
+
+fn clip_to_viewport(
+    start: ProjectedPoint,
+    end: ProjectedPoint,
+    width: u32,
+    height: u32,
+) -> Option<(ScreenPoint, ScreenPoint)> {
+    let mut x0 = start.0;
+    let mut y0 = start.1;
+    let mut x1 = end.0;
+    let mut y1 = end.1;
+    let x_min = 0.0;
+    let y_min = 0.0;
+    let x_max = width.saturating_sub(1) as f32;
+    let y_max = height.saturating_sub(1) as f32;
+
+    let mut code0 = out_code(x0, y0, x_min, y_min, x_max, y_max);
+    let mut code1 = out_code(x1, y1, x_min, y_min, x_max, y_max);
+
+    loop {
+        if code0 | code1 == 0 {
+            return Some((
+                (x0.round() as i32, y0.round() as i32),
+                (x1.round() as i32, y1.round() as i32),
+            ));
+        }
+
+        if code0 & code1 != 0 {
+            return None;
+        }
+
+        let outside = if code0 != 0 { code0 } else { code1 };
+        let (x, y) = if outside & OUT_TOP != 0 {
+            let x = intersect_x_at_y((x0, y0), (x1, y1), y_min)?;
+            (x, y_min)
+        } else if outside & OUT_BOTTOM != 0 {
+            let x = intersect_x_at_y((x0, y0), (x1, y1), y_max)?;
+            (x, y_max)
+        } else if outside & OUT_RIGHT != 0 {
+            let y = intersect_y_at_x((x0, y0), (x1, y1), x_max)?;
+            (x_max, y)
+        } else {
+            let y = intersect_y_at_x((x0, y0), (x1, y1), x_min)?;
+            (x_min, y)
+        };
+
+        if outside == code0 {
+            x0 = x;
+            y0 = y;
+            code0 = out_code(x0, y0, x_min, y_min, x_max, y_max);
+        } else {
+            x1 = x;
+            y1 = y;
+            code1 = out_code(x1, y1, x_min, y_min, x_max, y_max);
+        }
+    }
+}
+
+fn out_code(x: f32, y: f32, x_min: f32, y_min: f32, x_max: f32, y_max: f32) -> u8 {
+    let mut code = 0;
+
+    if x < x_min {
+        code |= OUT_LEFT;
+    } else if x > x_max {
+        code |= OUT_RIGHT;
+    }
+
+    if y < y_min {
+        code |= OUT_TOP;
+    } else if y > y_max {
+        code |= OUT_BOTTOM;
+    }
+
+    code
+}
+
+fn intersect_x_at_y(start: ProjectedPoint, end: ProjectedPoint, y: f32) -> Option<f32> {
+    let dy = end.1 - start.1;
+    if dy.abs() <= f32::EPSILON {
+        return None;
+    }
+
+    let t = (y - start.1) / dy;
+    Some(start.0 + (end.0 - start.0) * t)
+}
+
+fn intersect_y_at_x(start: ProjectedPoint, end: ProjectedPoint, x: f32) -> Option<f32> {
+    let dx = end.0 - start.0;
+    if dx.abs() <= f32::EPSILON {
+        return None;
+    }
+
+    let t = (x - start.0) / dx;
+    Some(start.1 + (end.1 - start.1) * t)
 }
 
 #[cfg(test)]
@@ -303,7 +406,7 @@ mod tests {
     use crate::math::Vec3;
     use crate::terminal::TerminalGeometry;
 
-    use super::{Renderer, clip_to_near_plane, project_segment, scale_to_fit};
+    use super::{Renderer, clip_to_near_plane, clip_to_viewport, project_segment, scale_to_fit};
 
     #[test]
     fn clip_to_near_plane_keeps_visible_portion() {
@@ -353,5 +456,16 @@ mod tests {
         let (width, height) = scale_to_fit(1600, 900, 960, 720);
         assert!(width <= 960);
         assert!(height <= 720);
+    }
+
+    #[test]
+    fn viewport_clipping_bounds_extreme_segments() {
+        let clipped = clip_to_viewport((-100_000.0, 180.0), (100_000.0, 180.0), 640, 360)
+            .expect("segment crossing the viewport should survive clipping");
+
+        for (x, y) in [clipped.0, clipped.1] {
+            assert!((0..640).contains(&x));
+            assert!((0..360).contains(&y));
+        }
     }
 }
