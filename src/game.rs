@@ -13,9 +13,9 @@ use crate::{
 
 const PLAYER_RADIUS: f32 = 2.4;
 const PLAYER_EYE_HEIGHT: f32 = 2.8;
-const PLAYER_MOVE_SPEED: f32 = 24.0;
-const PLAYER_REVERSE_SPEED: f32 = 14.0;
-const PLAYER_TREAD_TURN_RATE: f32 = 0.102;
+const PLAYER_MOVE_SPEED: f32 = 22.0;
+const PLAYER_REVERSE_SPEED: f32 = 13.0;
+const PLAYER_TREAD_TURN_RATE: f32 = 0.088;
 const PLAYER_SHELL_SPEED: f32 = 92.0;
 const ENEMY_SHELL_SPEED: f32 = 74.0;
 const PLAYER_SHELL_LIFETIME: f32 = 2.2;
@@ -1581,11 +1581,14 @@ impl Game {
     }
 
     fn autopilot_input(&self) -> UpdateInput {
-        let Some(enemy) = self.enemy.filter(|enemy| enemy.alive) else {
-            return UpdateInput::default();
+        let Some(enemy) = self.enemy else {
+            return self.autopilot_search_input();
         };
 
         let enemy_position = enemy_position(enemy);
+        if !enemy.alive {
+            return self.autopilot_search_input_toward(enemy_position);
+        }
         let enemy_bearing = angle_to(self.player.position, enemy_position);
         let candidate_offsets = [
             0.0,
@@ -1625,6 +1628,29 @@ impl Game {
         input
     }
 
+    fn autopilot_search_input(&self) -> UpdateInput {
+        if self.blocked_timer > 0.0 {
+            return tread_input_for_heading(
+                self.player.heading,
+                wrap_angle(self.player.heading + PI * 0.5),
+                0,
+            );
+        }
+
+        let sweep_heading =
+            wrap_angle(self.player.heading + (self.title_timer * 0.85).sin() * 0.35);
+        tread_input_for_heading(self.player.heading, sweep_heading, 1)
+    }
+
+    fn autopilot_search_input_toward(&self, target_position: Vec3) -> UpdateInput {
+        if self.blocked_timer > 0.0 {
+            return self.autopilot_search_input();
+        }
+
+        let heading = angle_to(self.player.position, target_position);
+        tread_input_for_heading(self.player.heading, heading, 1)
+    }
+
     fn autopilot_candidate_score(
         &self,
         heading: f32,
@@ -1649,7 +1675,15 @@ impl Game {
             self.autopilot_enemy_fire_threat(predicted_position, enemy, enemy_position);
         let shielded = self.segment_hits_obstacle(enemy_position, predicted_position);
 
-        let mut score = 12.0 - (distance_to_enemy - 38.0).abs() * 0.1;
+        let mut score = 12.0
+            - (distance_to_enemy
+                - if enemy.kind == EnemyKind::Missile {
+                    52.0
+                } else {
+                    38.0
+                })
+            .abs()
+                * 0.1;
         score -= projectile_threat * 28.0;
         score -= fire_threat * 18.0;
         score -= angle_delta(self.player.heading, heading).abs() * 1.5;
@@ -1662,8 +1696,22 @@ impl Game {
         if throttle == 0 && clear_shot && aim_error < 0.18 {
             score += 3.0;
         }
-        if enemy.kind == EnemyKind::Missile && distance_to_enemy < 24.0 {
-            score -= 12.0;
+        if enemy.kind == EnemyKind::Missile {
+            if throttle > 0 {
+                score -= 16.0;
+            }
+            if throttle < 0 {
+                score += 8.0;
+                if aim_error > AUTOPILOT_SHOT_CONE {
+                    score += 4.0;
+                }
+            }
+            if distance_to_enemy < 40.0 {
+                score -= (40.0 - distance_to_enemy) * 0.7;
+                if throttle < 0 {
+                    score += 10.0;
+                }
+            }
         }
         Some(score)
     }
@@ -3224,6 +3272,71 @@ mod tests {
             },
         );
         assert!(game.autopilot);
+    }
+
+    #[test]
+    fn autopilot_searches_when_no_enemy_is_active() {
+        let mut game = Game::new();
+        game.start_game();
+        game.enemy = None;
+
+        let input = game.autopilot_input();
+        assert_ne!(input.left_tread_axis(), 0);
+        assert_ne!(input.right_tread_axis(), 0);
+    }
+
+    #[test]
+    fn autopilot_keeps_hunting_after_enemy_is_destroyed() {
+        let mut game = Game::new();
+        game.start_game();
+        game.player.position = Vec3::new(0.0, 0.0, 0.0);
+        game.player.heading = 0.0;
+        game.enemy = Some(super::Enemy {
+            kind: EnemyKind::SlowTank,
+            position: Vec3::new(0.0, 0.0, 72.0),
+            heading: super::PI,
+            desired_heading: super::PI,
+            radar_heading: 0.0,
+            tread_phase: 0.0,
+            sleep_timer: 0.0,
+            state_timer: 0.0,
+            decision_timer: 0.0,
+            shot_cooldown: 0.0,
+            missile_height: 0.0,
+            missile_vertical_velocity: 0.0,
+            alive: false,
+        });
+
+        let input = game.autopilot_input();
+        assert_eq!(input.left_tread_axis(), 1);
+        assert_eq!(input.right_tread_axis(), 1);
+    }
+
+    #[test]
+    fn autopilot_reverses_while_acquiring_missile_shot() {
+        let mut game = Game::new();
+        game.start_game();
+        game.player.position = Vec3::new(0.0, 0.0, 0.0);
+        game.player.heading = 0.35;
+        game.enemy = Some(super::Enemy {
+            kind: EnemyKind::Missile,
+            position: Vec3::new(0.0, 0.0, 60.0),
+            heading: super::PI,
+            desired_heading: super::PI,
+            radar_heading: 0.0,
+            tread_phase: 0.0,
+            sleep_timer: 0.0,
+            state_timer: 0.0,
+            decision_timer: 0.0,
+            shot_cooldown: 0.0,
+            missile_height: 0.0,
+            missile_vertical_velocity: 0.0,
+            alive: true,
+        });
+
+        let input = game.autopilot_input();
+        assert!(input.left_tread_axis() < 0 || input.right_tread_axis() < 0);
+        assert!(!(input.left_tread_axis() > 0 && input.right_tread_axis() > 0));
     }
 
     #[test]
