@@ -1,13 +1,6 @@
-mod app;
-mod game;
-mod kitty;
-mod math;
-mod render;
-mod terminal;
-
 fn main() {
-    if let Err(err) = app::run() {
-        eprintln!("battlezone-tty: {err:#}");
+    if let Err(err) = battlezone::app::run() {
+        eprintln!("battlezone: {err:#}");
         std::process::exit(1);
     }
 }

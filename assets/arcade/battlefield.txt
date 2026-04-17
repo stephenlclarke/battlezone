@@ -1,0 +1,22 @@
+# kind x z heading_deg radius
+wide_pyramid 32.0 32.0 0.0 4.0
+short_box 64.0 0.0 22.5 3.75
+wide_pyramid -128.0 0.0 45.0 4.0
+short_box -128.0 64.0 90.0 3.75
+wide_pyramid -128.0 -128.0 33.75 4.0
+narrow_pyramid 64.0 -128.0 56.25 3.25
+tall_box 0.0 -128.0 67.5 3.25
+narrow_pyramid 0.0 64.0 78.75 3.25
+tall_box 80.0 48.0 90.0 3.25
+short_box 24.0 -64.0 101.25 3.75
+wide_pyramid 68.0 -9.0 112.5 4.0
+narrow_pyramid 64.0 -56.0 123.75 3.25
+tall_box -116.0 -40.0 135.0 3.25
+short_box 12.0 -108.0 146.25 3.75
+wide_pyramid -24.0 -104.0 157.5 4.0
+narrow_pyramid -28.0 -24.0 168.75 3.25
+tall_box -100.0 112.0 180.0 3.25
+short_box -52.0 120.0 191.25 3.75
+wide_pyramid -76.0 64.0 202.5 4.0
+narrow_pyramid -68.0 36.0 213.75 3.25
+tall_box -12.0 44.0 225.0 3.25

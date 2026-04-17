@@ -1,11 +1,22 @@
 [package]
-name = "battlezone-tty"
-version = "0.1.0"
+name = "battlezone"
+version = "1.0.0"
 edition = "2024"
+autobins = false
+default-run = "battlezone"
+
+[[bin]]
+name = "battlezone"
+path = "src/main.rs"
 
 [dependencies]
 anyhow = "1.0"
 base64 = "0.22"
 crossterm = "0.29"
+fastrand = "2.3"
 libc = "0.2"
 png = "0.18"
+rodio = "0.21"
+
+[dev-dependencies]
+gif = "0.13"

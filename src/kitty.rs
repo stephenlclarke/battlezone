@@ -1,3 +1,5 @@
+//! Wraps the Kitty graphics protocol so rendered frames can be pushed into compatible terminals.
+
 use std::io::{IsTerminal, Stdout, Write};
 
 use anyhow::{Result, bail};
@@ -19,6 +21,8 @@ const ESCAPE_END: &str = "\x1b\\";
 pub struct KittyGraphics {
     placement_cols: u16,
     placement_rows: u16,
+    png_buffer: Vec<u8>,
+    base64_buffer: String,
 }
 
 impl KittyGraphics {
@@ -26,6 +30,8 @@ impl KittyGraphics {
         Self {
             placement_cols,
             placement_rows,
+            png_buffer: Vec::new(),
+            base64_buffer: String::new(),
         }
     }
 
@@ -33,8 +39,9 @@ impl KittyGraphics {
         let term = std::env::var("TERM").unwrap_or_default();
         let term_program = std::env::var("TERM_PROGRAM").unwrap_or_default();
         let force = std::env::var("BATTLEZONE_FORCE_KITTY").unwrap_or_default();
+        let kitty_window = std::env::var_os("KITTY_WINDOW_ID").is_some();
 
-        if force == "1" || is_known_kitty_graphics_terminal(&term, &term_program) {
+        if force == "1" || kitty_window || is_known_kitty_graphics_terminal(&term, &term_program) {
             return Ok(());
         }
 
@@ -46,14 +53,15 @@ impl KittyGraphics {
         self.placement_rows = placement_rows;
     }
 
-    pub fn draw_frame(&self, stdout: &mut Stdout, image: &RenderedImage) -> Result<()> {
-        let png = encode_png(image)?;
-        let encoded = STANDARD.encode(png);
-        let chunk_count = encoded.len().div_ceil(CHUNK_SIZE);
+    pub fn draw_frame(&mut self, stdout: &mut Stdout, image: &RenderedImage) -> Result<()> {
+        encode_png_into(image, &mut self.png_buffer)?;
+        self.base64_buffer.clear();
+        STANDARD.encode_string(&self.png_buffer, &mut self.base64_buffer);
+        let chunk_count = self.base64_buffer.len().div_ceil(CHUNK_SIZE);
 
         queue!(stdout, MoveTo(0, 0), Clear(ClearType::All))?;
 
-        for (index, chunk) in encoded.as_bytes().chunks(CHUNK_SIZE).enumerate() {
+        for (index, chunk) in self.base64_buffer.as_bytes().chunks(CHUNK_SIZE).enumerate() {
             let more = if index + 1 == chunk_count { 0 } else { 1 };
             if index == 0 {
                 write!(
@@ -64,6 +72,7 @@ impl KittyGraphics {
             } else {
                 write!(stdout, "{ESCAPE_BEGIN}m={more};")?;
             }
+
             stdout.write_all(chunk)?;
             write!(stdout, "{ESCAPE_END}")?;
         }
@@ -78,52 +87,98 @@ impl KittyGraphics {
 }
 
 fn is_known_kitty_graphics_terminal(term: &str, term_program: &str) -> bool {
-    term == "xterm-ghostty" || term_program == "ghostty" || term_program == "WarpTerminal"
+    term == "xterm-kitty"
+        || term == "xterm-ghostty"
+        || term_program == "ghostty"
+        || term_program == "kitty"
+        || term_program == "WarpTerminal"
 }
 
 fn validate_environment(term: &str, is_terminal: bool) -> Result<()> {
     if !is_terminal {
         bail!(
             "Kitty graphics output requires an interactive terminal on stdout. \
-             Run inside kitty or another terminal that supports the protocol."
+             Run inside kitty or another compatible terminal."
         );
     }
 
     if term.is_empty() || term == "dumb" {
         bail!(
             "TERM={term:?} does not expose the interactive terminal capabilities needed for \
-             Kitty graphics. Run inside kitty or another compatible terminal, or set \
-             BATTLEZONE_FORCE_KITTY=1 to bypass this basic check."
+             Kitty graphics. Run inside kitty or set BATTLEZONE_FORCE_KITTY=1 to bypass this \
+             basic check."
         );
     }
 
     Ok(())
 }
 
+#[cfg(test)]
 fn encode_png(image: &RenderedImage) -> Result<Vec<u8>> {
     let mut encoded = Vec::new();
-    {
-        let mut encoder = Encoder::new(&mut encoded, image.width, image.height);
-        encoder.set_color(ColorType::Rgba);
-        encoder.set_depth(BitDepth::Eight);
-        encoder.set_compression(Compression::Fast);
-        let mut writer = encoder.write_header()?;
-        writer.write_image_data(&image.pixels)?;
-    }
+    encode_png_into(image, &mut encoded)?;
     Ok(encoded)
+}
+
+fn encode_png_into(image: &RenderedImage, encoded: &mut Vec<u8>) -> Result<()> {
+    encoded.clear();
+    let mut encoder = Encoder::new(encoded, image.width, image.height);
+    encoder.set_color(ColorType::Rgba);
+    encoder.set_depth(BitDepth::Eight);
+    encoder.set_compression(Compression::Fast);
+    let mut writer = encoder.write_header()?;
+    writer.write_image_data(&image.pixels)?;
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{CHUNK_SIZE, encode_png, is_known_kitty_graphics_terminal, validate_environment};
+    use std::{
+        env,
+        sync::{Mutex, OnceLock},
+    };
+
+    use super::{
+        CHUNK_SIZE, KittyGraphics, encode_png, is_known_kitty_graphics_terminal,
+        validate_environment,
+    };
     use crate::render::RenderedImage;
 
+    fn env_lock() -> &'static Mutex<()> {
+        static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        ENV_LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    fn with_env_vars<T>(vars: &[(&str, Option<&str>)], f: impl FnOnce() -> T) -> T {
+        let _guard = env_lock().lock().expect("env lock should not be poisoned");
+        let previous = vars
+            .iter()
+            .map(|(key, _)| ((*key).to_string(), env::var_os(key)))
+            .collect::<Vec<_>>();
+        for (key, value) in vars {
+            match value {
+                Some(value) => unsafe { env::set_var(key, value) },
+                None => unsafe { env::remove_var(key) },
+            }
+        }
+        let result = f();
+        for (key, value) in previous {
+            match value {
+                Some(value) => unsafe { env::set_var(&key, value) },
+                None => unsafe { env::remove_var(&key) },
+            }
+        }
+        result
+    }
+
     #[test]
-    fn png_encoder_preserves_expected_dimensions() {
+    fn png_encoder_writes_signature() {
         let image = RenderedImage {
             width: 2,
             height: 2,
-            pixels: vec![0, 0, 0, 255, 255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255],
+            pixels: vec![
+                0, 0, 0, 255, 255, 255, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255,
+            ],
         };
 
         let png = encode_png(&image).expect("png encoding should succeed");
@@ -136,27 +191,57 @@ mod tests {
     }
 
     #[test]
-    fn environment_check_allows_non_kitty_terminals() {
-        validate_environment("xterm-256color", true)
-            .expect("interactive compatible terminals should pass");
+    fn environment_check_allows_interactive_terminals() {
+        validate_environment("xterm-256color", true).expect("interactive terminals should pass");
     }
 
     #[test]
     fn environment_check_rejects_dumb_terminals() {
-        let result = validate_environment("dumb", true);
-        assert!(result.is_err());
+        assert!(validate_environment("dumb", true).is_err());
     }
 
     #[test]
-    fn known_ghostty_environment_skips_terminal_check() {
+    fn known_terminals_include_kitty() {
+        assert!(is_known_kitty_graphics_terminal("xterm-kitty", ""));
         assert!(is_known_kitty_graphics_terminal("xterm-ghostty", "ghostty"));
+        assert!(is_known_kitty_graphics_terminal("", "WarpTerminal"));
     }
 
     #[test]
-    fn known_warp_environment_skips_terminal_check() {
-        assert!(is_known_kitty_graphics_terminal(
-            "xterm-256color",
-            "WarpTerminal"
-        ));
+    fn force_flag_bypasses_terminal_detection() {
+        with_env_vars(
+            &[
+                ("BATTLEZONE_FORCE_KITTY", Some("1")),
+                ("TERM", Some("dumb")),
+                ("TERM_PROGRAM", None),
+            ],
+            || {
+                assert!(KittyGraphics::ensure_supported().is_ok());
+            },
+        );
+    }
+
+    #[test]
+    fn kitty_window_id_bypasses_terminal_detection() {
+        with_env_vars(
+            &[
+                ("BATTLEZONE_FORCE_KITTY", None),
+                ("KITTY_WINDOW_ID", Some("123")),
+                ("TERM", Some("dumb")),
+                ("TERM_PROGRAM", None),
+            ],
+            || {
+                assert!(KittyGraphics::ensure_supported().is_ok());
+            },
+        );
+    }
+
+    #[test]
+    fn resize_updates_placement_dimensions() {
+        let mut graphics = KittyGraphics::new(10, 20);
+        graphics.resize(30, 40);
+
+        assert_eq!(graphics.placement_cols, 30);
+        assert_eq!(graphics.placement_rows, 40);
     }
 }

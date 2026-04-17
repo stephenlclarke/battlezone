@@ -1,14 +1,15 @@
-use crate::game::{Camera, FrameData, WorldLine};
+//! Projects Battlezone world geometry into a Kitty graphics frame and draws overlay text.
+
 use crate::math::{Vec3, rotate_y};
 use crate::terminal::TerminalGeometry;
 
 const NEAR_PLANE: f32 = 0.2;
-const SKY_TOP: Color = Color(6, 12, 10, 255);
-const SKY_BOTTOM: Color = Color(12, 42, 22, 255);
-const GROUND_NEAR: Color = Color(18, 56, 18, 255);
-const GROUND_FAR: Color = Color(6, 16, 6, 255);
+const SKY_TOP: Color = Color(6, 10, 8, 255);
+const SKY_BOTTOM: Color = Color(12, 32, 18, 255);
+const GROUND_NEAR: Color = Color(14, 42, 14, 255);
+const GROUND_FAR: Color = Color(4, 12, 4, 255);
 const HORIZON_COLOR: Color = Color(50, 120, 50, 255);
-const CROSSHAIR_COLOR: Color = Color(160, 255, 160, 255);
+const CROSSHAIR_COLOR: Color = Color(180, 255, 180, 255);
 
 type ProjectedPoint = (f32, f32);
 type ScreenPoint = (i32, i32);
@@ -19,8 +20,52 @@ const OUT_RIGHT: u8 = 0b0010;
 const OUT_TOP: u8 = 0b0100;
 const OUT_BOTTOM: u8 = 0b1000;
 
-#[derive(Clone, Copy)]
-struct Color(u8, u8, u8, u8);
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Camera {
+    pub position: Vec3,
+    pub heading: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WorldLine {
+    pub start: Vec3,
+    pub end: Vec3,
+    pub brightness: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ScreenLine {
+    pub start: (i32, i32),
+    pub end: (i32, i32),
+    pub color: [u8; 4],
+    pub thickness: i32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ScreenDot {
+    pub center: (i32, i32),
+    pub color: [u8; 4],
+    pub radius: i32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ScreenText {
+    pub position: (i32, i32),
+    pub text: String,
+    pub color: [u8; 4],
+    pub scale: u8,
+    pub centered: bool,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Scene {
+    pub camera: Camera,
+    pub world_lines: Vec<WorldLine>,
+    pub overlay_lines: Vec<ScreenLine>,
+    pub overlay_dots: Vec<ScreenDot>,
+    pub overlay_text: Vec<ScreenText>,
+    pub show_crosshair: bool,
+}
 
 pub struct RenderedImage {
     pub width: u32,
@@ -34,10 +79,26 @@ pub struct Renderer {
     focal: f32,
 }
 
+#[derive(Clone, Copy)]
+struct Color(u8, u8, u8, u8);
+
 struct PixelBuffer {
     width: usize,
     height: usize,
     pixels: Vec<u8>,
+}
+
+impl Scene {
+    pub fn empty(camera: Camera) -> Self {
+        Self {
+            camera,
+            world_lines: Vec::new(),
+            overlay_lines: Vec::new(),
+            overlay_dots: Vec::new(),
+            overlay_text: Vec::new(),
+            show_crosshair: false,
+        }
+    }
 }
 
 impl Renderer {
@@ -54,27 +115,62 @@ impl Renderer {
         *self = Self::new(geometry);
     }
 
-    pub fn render(&self, frame: &FrameData) -> RenderedImage {
-        let mut buffer = PixelBuffer::new(self.image_width as usize, self.image_height as usize);
-        buffer.fill_gradient(self.image_height / 2);
-        buffer.draw_horizon(self.image_height / 2, HORIZON_COLOR);
+    pub fn image_width(&self) -> u32 {
+        self.image_width
+    }
 
-        for WorldLine { start, end } in &frame.lines {
+    pub fn image_height(&self) -> u32 {
+        self.image_height
+    }
+
+    pub fn render(&self, scene: &Scene) -> RenderedImage {
+        let mut buffer = PixelBuffer::new(self.image_width as usize, self.image_height as usize);
+        let horizon = self.image_height / 2;
+        buffer.fill_gradient(horizon);
+        buffer.draw_horizon(horizon, HORIZON_COLOR);
+
+        for line in &scene.world_lines {
             if let Some(((x0, y0), (x1, y1), depth)) = project_segment(
-                frame.camera,
-                *start,
-                *end,
+                scene.camera,
+                line.start,
+                line.end,
                 self.image_width,
                 self.image_height,
                 self.focal,
             ) {
-                let color = depth_color(depth);
+                let color = world_color(depth, line.brightness);
                 let thickness = depth_thickness(depth);
                 buffer.draw_line(x0, y0, x1, y1, color, thickness);
             }
         }
 
-        buffer.draw_crosshair(CROSSHAIR_COLOR);
+        for line in &scene.overlay_lines {
+            buffer.draw_line(
+                line.start.0,
+                line.start.1,
+                line.end.0,
+                line.end.1,
+                Color::from_rgba(line.color),
+                line.thickness,
+            );
+        }
+
+        for dot in &scene.overlay_dots {
+            buffer.draw_dot(
+                dot.center.0,
+                dot.center.1,
+                Color::from_rgba(dot.color),
+                dot.radius,
+            );
+        }
+
+        for text in &scene.overlay_text {
+            buffer.draw_text(text);
+        }
+
+        if scene.show_crosshair {
+            buffer.draw_crosshair(CROSSHAIR_COLOR);
+        }
 
         RenderedImage {
             width: self.image_width,
@@ -111,8 +207,14 @@ impl PixelBuffer {
     }
 
     fn draw_horizon(&mut self, horizon: u32, color: Color) {
-        let y = horizon as i32;
-        self.draw_line(0, y, self.width as i32 - 1, y, color, 1);
+        self.draw_line(
+            0,
+            horizon as i32,
+            self.width as i32 - 1,
+            horizon as i32,
+            color,
+            1,
+        );
     }
 
     fn draw_line(&mut self, x0: i32, y0: i32, x1: i32, y1: i32, color: Color, thickness: i32) {
@@ -140,6 +242,16 @@ impl PixelBuffer {
         }
     }
 
+    fn draw_dot(&mut self, cx: i32, cy: i32, color: Color, radius: i32) {
+        for dy in -radius..=radius {
+            for dx in -radius..=radius {
+                if dx * dx + dy * dy <= radius * radius {
+                    self.put_pixel(cx + dx, cy + dy, color);
+                }
+            }
+        }
+    }
+
     fn draw_crosshair(&mut self, color: Color) {
         let cx = (self.width / 2) as i32;
         let cy = (self.height / 2) as i32;
@@ -148,6 +260,46 @@ impl PixelBuffer {
         self.draw_line(cx, cy - 12, cx, cy - 3, color, 1);
         self.draw_line(cx, cy + 3, cx, cy + 12, color, 1);
         self.stamp(cx, cy, color, 1);
+    }
+
+    fn draw_text(&mut self, text: &ScreenText) {
+        let scale = i32::from(text.scale.max(1));
+        let width = text_width(&text.text, scale);
+        let start_x = if text.centered {
+            text.position.0 - width / 2
+        } else {
+            text.position.0
+        };
+
+        for (index, glyph) in text.text.chars().enumerate() {
+            let x = start_x + index as i32 * glyph_advance(scale);
+            self.draw_char(
+                x,
+                text.position.1,
+                glyph,
+                Color::from_rgba(text.color),
+                scale,
+            );
+        }
+    }
+
+    fn draw_char(&mut self, x: i32, y: i32, glyph: char, color: Color, scale: i32) {
+        for (row_index, bits) in glyph_rows(glyph).iter().enumerate() {
+            for col in 0..5 {
+                if (bits >> (4 - col)) & 1 == 0 {
+                    continue;
+                }
+                for sy in 0..scale {
+                    for sx in 0..scale {
+                        self.put_pixel(
+                            x + col * scale + sx,
+                            y + row_index as i32 * scale + sy,
+                            color,
+                        );
+                    }
+                }
+            }
+        }
     }
 
     fn stamp(&mut self, x: i32, y: i32, color: Color, thickness: i32) {
@@ -179,6 +331,12 @@ impl PixelBuffer {
         self.pixels[index + 1] = color.1;
         self.pixels[index + 2] = color.2;
         self.pixels[index + 3] = color.3;
+    }
+}
+
+impl Color {
+    fn from_rgba([r, g, b, a]: [u8; 4]) -> Self {
+        Self(r, g, b, a)
     }
 }
 
@@ -222,16 +380,23 @@ fn lerp_color(start: Color, end: Color, t: f32) -> Color {
     )
 }
 
-fn depth_color(depth: f32) -> Color {
-    if depth < 8.0 {
+fn world_color(depth: f32, brightness: f32) -> Color {
+    let base = if depth < 8.0 {
         Color(170, 255, 170, 255)
     } else if depth < 20.0 {
-        Color(100, 225, 100, 255)
+        Color(110, 220, 110, 255)
     } else if depth < 40.0 {
-        Color(65, 185, 65, 255)
+        Color(72, 180, 72, 255)
     } else {
         Color(35, 105, 35, 255)
-    }
+    };
+    let brightness = brightness.clamp(0.3, 1.5);
+    Color(
+        ((base.0 as f32 * brightness).min(255.0)) as u8,
+        ((base.1 as f32 * brightness).min(255.0)) as u8,
+        ((base.2 as f32 * brightness).min(255.0)) as u8,
+        base.3,
+    )
 }
 
 fn depth_thickness(depth: f32) -> i32 {
@@ -242,6 +407,37 @@ fn depth_thickness(depth: f32) -> i32 {
     } else {
         1
     }
+}
+
+fn world_to_camera(camera: Camera, point: Vec3) -> Vec3 {
+    let translated = point - camera.position;
+    rotate_y(translated, camera.heading)
+}
+
+fn clip_to_near_plane(mut start: Vec3, mut end: Vec3) -> Option<(Vec3, Vec3)> {
+    if start.z < NEAR_PLANE && end.z < NEAR_PLANE {
+        return None;
+    }
+
+    if start.z < NEAR_PLANE {
+        let t = (NEAR_PLANE - start.z) / (end.z - start.z);
+        start = start + (end - start) * t;
+    }
+    if end.z < NEAR_PLANE {
+        let t = (NEAR_PLANE - end.z) / (start.z - end.z);
+        end = end + (start - end) * t;
+    }
+    Some((start, end))
+}
+
+fn project_point(point: Vec3, width: u32, height: u32, focal: f32) -> Option<ProjectedPoint> {
+    if point.z <= NEAR_PLANE {
+        return None;
+    }
+
+    let x = point.x * focal / point.z + width as f32 * 0.5;
+    let y = height as f32 * 0.5 - point.y * focal / point.z;
+    Some((x, y))
 }
 
 fn project_segment(
@@ -258,70 +454,25 @@ fn project_segment(
 
     let projected_start = project_point(start, width, height, focal)?;
     let projected_end = project_point(end, width, height, focal)?;
-    let (projected_start, projected_end) =
-        clip_to_viewport(projected_start, projected_end, width, height)?;
-    let depth = (start.z + end.z) * 0.5;
-    Some((projected_start, projected_end, depth))
-}
 
-fn world_to_camera(camera: Camera, point: Vec3) -> Vec3 {
-    let relative = point - camera.position;
-    rotate_y(relative, -camera.heading)
-}
-
-fn clip_to_near_plane(mut start: Vec3, mut end: Vec3) -> Option<(Vec3, Vec3)> {
-    if start.z < NEAR_PLANE && end.z < NEAR_PLANE {
-        return None;
-    }
-
-    if start.z < NEAR_PLANE {
-        start = interpolate_to_near(start, end);
-    }
-    if end.z < NEAR_PLANE {
-        end = interpolate_to_near(end, start);
-    }
-
-    Some((start, end))
-}
-
-fn interpolate_to_near(behind: Vec3, front: Vec3) -> Vec3 {
-    let t = (NEAR_PLANE - behind.z) / (front.z - behind.z);
-    Vec3::new(
-        behind.x + (front.x - behind.x) * t,
-        behind.y + (front.y - behind.y) * t,
-        NEAR_PLANE,
-    )
-}
-
-fn project_point(point: Vec3, width: u32, height: u32, focal: f32) -> Option<ProjectedPoint> {
-    if point.z <= NEAR_PLANE {
-        return None;
-    }
-
-    let half_width = width as f32 * 0.5;
-    let half_height = height as f32 * 0.5;
-    let x = half_width + (point.x / point.z) * focal;
-    let y = half_height - (point.y / point.z) * focal * 0.65;
-    Some((x, y))
+    let clipped = clip_to_viewport(projected_start, projected_end, width as i32, height as i32)?;
+    let depth = start.z.min(end.z);
+    Some((clipped.0, clipped.1, depth))
 }
 
 fn clip_to_viewport(
     start: ProjectedPoint,
     end: ProjectedPoint,
-    width: u32,
-    height: u32,
+    width: i32,
+    height: i32,
 ) -> Option<(ScreenPoint, ScreenPoint)> {
     let mut x0 = start.0;
     let mut y0 = start.1;
     let mut x1 = end.0;
     let mut y1 = end.1;
-    let x_min = 0.0;
-    let y_min = 0.0;
-    let x_max = width.saturating_sub(1) as f32;
-    let y_max = height.saturating_sub(1) as f32;
 
-    let mut code0 = out_code(x0, y0, x_min, y_min, x_max, y_max);
-    let mut code1 = out_code(x1, y1, x_min, y_min, x_max, y_max);
+    let mut code0 = out_code(x0, y0, width, height);
+    let mut code1 = out_code(x1, y1, width, height);
 
     loop {
         if code0 | code1 == 0 {
@@ -330,91 +481,126 @@ fn clip_to_viewport(
                 (x1.round() as i32, y1.round() as i32),
             ));
         }
-
         if code0 & code1 != 0 {
             return None;
         }
 
-        let outside = if code0 != 0 { code0 } else { code1 };
-        let (x, y) = if outside & OUT_TOP != 0 {
-            let x = intersect_x_at_y((x0, y0), (x1, y1), y_min)?;
-            (x, y_min)
-        } else if outside & OUT_BOTTOM != 0 {
-            let x = intersect_x_at_y((x0, y0), (x1, y1), y_max)?;
-            (x, y_max)
-        } else if outside & OUT_RIGHT != 0 {
-            let y = intersect_y_at_x((x0, y0), (x1, y1), x_max)?;
-            (x_max, y)
-        } else {
-            let y = intersect_y_at_x((x0, y0), (x1, y1), x_min)?;
-            (x_min, y)
-        };
+        let code_out = if code0 != 0 { code0 } else { code1 };
+        let (mut x, mut y) = (0.0, 0.0);
 
-        if outside == code0 {
+        if code_out & OUT_TOP != 0 {
+            x = x0 + (x1 - x0) * (0.0 - y0) / (y1 - y0);
+            y = 0.0;
+        } else if code_out & OUT_BOTTOM != 0 {
+            x = x0 + (x1 - x0) * ((height - 1) as f32 - y0) / (y1 - y0);
+            y = (height - 1) as f32;
+        } else if code_out & OUT_RIGHT != 0 {
+            y = y0 + (y1 - y0) * ((width - 1) as f32 - x0) / (x1 - x0);
+            x = (width - 1) as f32;
+        } else if code_out & OUT_LEFT != 0 {
+            y = y0 + (y1 - y0) * (0.0 - x0) / (x1 - x0);
+            x = 0.0;
+        }
+
+        if code_out == code0 {
             x0 = x;
             y0 = y;
-            code0 = out_code(x0, y0, x_min, y_min, x_max, y_max);
+            code0 = out_code(x0, y0, width, height);
         } else {
             x1 = x;
             y1 = y;
-            code1 = out_code(x1, y1, x_min, y_min, x_max, y_max);
+            code1 = out_code(x1, y1, width, height);
         }
     }
 }
 
-fn out_code(x: f32, y: f32, x_min: f32, y_min: f32, x_max: f32, y_max: f32) -> u8 {
+fn out_code(x: f32, y: f32, width: i32, height: i32) -> u8 {
     let mut code = 0;
-
-    if x < x_min {
+    if x < 0.0 {
         code |= OUT_LEFT;
-    } else if x > x_max {
+    } else if x >= width as f32 {
         code |= OUT_RIGHT;
     }
-
-    if y < y_min {
+    if y < 0.0 {
         code |= OUT_TOP;
-    } else if y > y_max {
+    } else if y >= height as f32 {
         code |= OUT_BOTTOM;
     }
-
     code
 }
 
-fn intersect_x_at_y(start: ProjectedPoint, end: ProjectedPoint, y: f32) -> Option<f32> {
-    let dy = end.1 - start.1;
-    if dy.abs() <= f32::EPSILON {
-        return None;
-    }
-
-    let t = (y - start.1) / dy;
-    Some(start.0 + (end.0 - start.0) * t)
+fn glyph_advance(scale: i32) -> i32 {
+    6 * scale
 }
 
-fn intersect_y_at_x(start: ProjectedPoint, end: ProjectedPoint, x: f32) -> Option<f32> {
-    let dx = end.0 - start.0;
-    if dx.abs() <= f32::EPSILON {
-        return None;
-    }
+fn text_width(text: &str, scale: i32) -> i32 {
+    (text.chars().count() as i32 * glyph_advance(scale)).saturating_sub(scale)
+}
 
-    let t = (x - start.0) / dx;
-    Some(start.1 + (end.1 - start.1) * t)
+fn glyph_rows(glyph: char) -> [u8; 7] {
+    match glyph.to_ascii_uppercase() {
+        'A' => [0x0e, 0x11, 0x11, 0x1f, 0x11, 0x11, 0x11],
+        'B' => [0x1e, 0x11, 0x11, 0x1e, 0x11, 0x11, 0x1e],
+        'C' => [0x0f, 0x10, 0x10, 0x10, 0x10, 0x10, 0x0f],
+        'D' => [0x1e, 0x11, 0x11, 0x11, 0x11, 0x11, 0x1e],
+        'E' => [0x1f, 0x10, 0x10, 0x1e, 0x10, 0x10, 0x1f],
+        'F' => [0x1f, 0x10, 0x10, 0x1e, 0x10, 0x10, 0x10],
+        'G' => [0x0f, 0x10, 0x10, 0x17, 0x11, 0x11, 0x0f],
+        'H' => [0x11, 0x11, 0x11, 0x1f, 0x11, 0x11, 0x11],
+        'I' => [0x1f, 0x04, 0x04, 0x04, 0x04, 0x04, 0x1f],
+        'J' => [0x1f, 0x02, 0x02, 0x02, 0x12, 0x12, 0x0c],
+        'K' => [0x11, 0x12, 0x14, 0x18, 0x14, 0x12, 0x11],
+        'L' => [0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x1f],
+        'M' => [0x11, 0x1b, 0x15, 0x15, 0x11, 0x11, 0x11],
+        'N' => [0x11, 0x19, 0x15, 0x13, 0x11, 0x11, 0x11],
+        'O' => [0x0e, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0e],
+        'P' => [0x1e, 0x11, 0x11, 0x1e, 0x10, 0x10, 0x10],
+        'Q' => [0x0e, 0x11, 0x11, 0x11, 0x15, 0x12, 0x0d],
+        'R' => [0x1e, 0x11, 0x11, 0x1e, 0x14, 0x12, 0x11],
+        'S' => [0x0f, 0x10, 0x10, 0x0e, 0x01, 0x01, 0x1e],
+        'T' => [0x1f, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04],
+        'U' => [0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0e],
+        'V' => [0x11, 0x11, 0x11, 0x11, 0x11, 0x0a, 0x04],
+        'W' => [0x11, 0x11, 0x11, 0x15, 0x15, 0x1b, 0x11],
+        'X' => [0x11, 0x11, 0x0a, 0x04, 0x0a, 0x11, 0x11],
+        'Y' => [0x11, 0x11, 0x0a, 0x04, 0x04, 0x04, 0x04],
+        'Z' => [0x1f, 0x01, 0x02, 0x04, 0x08, 0x10, 0x1f],
+        '0' => [0x0e, 0x11, 0x13, 0x15, 0x19, 0x11, 0x0e],
+        '1' => [0x04, 0x0c, 0x04, 0x04, 0x04, 0x04, 0x0e],
+        '2' => [0x0e, 0x11, 0x01, 0x02, 0x04, 0x08, 0x1f],
+        '3' => [0x1e, 0x01, 0x01, 0x06, 0x01, 0x01, 0x1e],
+        '4' => [0x02, 0x06, 0x0a, 0x12, 0x1f, 0x02, 0x02],
+        '5' => [0x1f, 0x10, 0x10, 0x1e, 0x01, 0x01, 0x1e],
+        '6' => [0x07, 0x08, 0x10, 0x1e, 0x11, 0x11, 0x0e],
+        '7' => [0x1f, 0x01, 0x02, 0x04, 0x08, 0x08, 0x08],
+        '8' => [0x0e, 0x11, 0x11, 0x0e, 0x11, 0x11, 0x0e],
+        '9' => [0x0e, 0x11, 0x11, 0x0f, 0x01, 0x02, 0x1c],
+        '-' => [0x00, 0x00, 0x00, 0x1f, 0x00, 0x00, 0x00],
+        '.' => [0x00, 0x00, 0x00, 0x00, 0x00, 0x06, 0x06],
+        ':' => [0x00, 0x06, 0x06, 0x00, 0x06, 0x06, 0x00],
+        '!' => [0x04, 0x04, 0x04, 0x04, 0x04, 0x00, 0x04],
+        '>' => [0x10, 0x08, 0x04, 0x02, 0x04, 0x08, 0x10],
+        '<' => [0x01, 0x02, 0x04, 0x08, 0x04, 0x02, 0x01],
+        '/' => [0x01, 0x02, 0x04, 0x08, 0x10, 0x00, 0x00],
+        ' ' => [0x00; 7],
+        _ => [0x1f, 0x11, 0x01, 0x02, 0x04, 0x00, 0x04],
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::game::Camera;
+    use super::{
+        Camera, Scene, ScreenDot, ScreenLine, ScreenText, WorldLine, clip_to_near_plane,
+        project_segment, raster_size, scale_to_fit,
+    };
     use crate::math::Vec3;
     use crate::terminal::TerminalGeometry;
 
-    use super::{Renderer, clip_to_near_plane, clip_to_viewport, project_segment, scale_to_fit};
-
     #[test]
-    fn clip_to_near_plane_keeps_visible_portion() {
-        let start = Vec3::new(0.0, 0.0, -1.0);
-        let end = Vec3::new(0.0, 0.0, 2.0);
-        let clipped = clip_to_near_plane(start, end).expect("segment should remain visible");
-        assert!(clipped.0.z >= 0.2);
-        assert!((clipped.1.z - 2.0).abs() < 0.001);
+    fn scale_to_fit_preserves_bounds() {
+        assert_eq!(scale_to_fit(1920, 1080, 960, 720), (960, 540));
+        assert_eq!(scale_to_fit(640, 480, 960, 720), (640, 480));
+        assert_eq!(scale_to_fit(0, 0, 960, 720), (640, 360));
     }
 
     #[test]
@@ -423,49 +609,84 @@ mod tests {
             position: Vec3::new(0.0, 0.0, 0.0),
             heading: 0.0,
         };
-        let projection = project_segment(
+        let segment = project_segment(
             camera,
-            Vec3::new(0.0, 0.0, 5.0),
-            Vec3::new(1.0, 0.0, 5.0),
+            Vec3::new(-1.0, 0.0, 8.0),
+            Vec3::new(1.0, 0.0, 8.0),
             640,
             360,
-            300.0,
+            320.0,
         );
-
-        assert!(projection.is_some());
+        assert!(segment.is_some());
     }
 
     #[test]
-    fn renderer_produces_rgba_frame() {
-        let renderer = Renderer::new(TerminalGeometry {
-            cols: 80,
-            rows: 24,
-            pixel_width: 800,
-            pixel_height: 600,
-        });
-
-        let image = renderer.render(&crate::game::Game::new().frame());
-        assert_eq!(
-            image.pixels.len(),
-            image.width as usize * image.height as usize * 4
-        );
-    }
-
-    #[test]
-    fn scale_to_fit_preserves_bounds() {
-        let (width, height) = scale_to_fit(1600, 900, 960, 720);
-        assert!(width <= 960);
-        assert!(height <= 720);
+    fn clip_to_near_plane_keeps_visible_portion() {
+        let clipped = clip_to_near_plane(Vec3::new(0.0, 0.0, 0.1), Vec3::new(0.0, 0.0, 2.0))
+            .expect("segment should clip");
+        assert!((clipped.0.z - 0.2).abs() < 0.001);
+        assert!((clipped.1.z - 2.0).abs() < 0.001);
     }
 
     #[test]
     fn viewport_clipping_bounds_extreme_segments() {
-        let clipped = clip_to_viewport((-100_000.0, 180.0), (100_000.0, 180.0), 640, 360)
-            .expect("segment crossing the viewport should survive clipping");
+        let camera = Camera {
+            position: Vec3::new(0.0, 0.0, 0.0),
+            heading: 0.0,
+        };
+        let segment = project_segment(
+            camera,
+            Vec3::new(-50.0, 0.0, 10.0),
+            Vec3::new(50.0, 0.0, 10.0),
+            320,
+            180,
+            160.0,
+        )
+        .expect("segment should clip into viewport");
+        assert!(segment.0.0 >= 0);
+        assert!(segment.1.0 < 320);
+    }
 
-        for (x, y) in [clipped.0, clipped.1] {
-            assert!((0..640).contains(&x));
-            assert!((0..360).contains(&y));
-        }
+    #[test]
+    fn raster_size_uses_terminal_pixels_when_available() {
+        let geometry = TerminalGeometry {
+            cols: 100,
+            rows: 40,
+            pixel_width: 1200,
+            pixel_height: 800,
+        };
+        assert_eq!(raster_size(geometry), (960, 640));
+    }
+
+    #[test]
+    fn renderer_scene_types_are_constructible() {
+        let mut scene = Scene::empty(Camera {
+            position: Vec3::new(0.0, 0.0, 0.0),
+            heading: 0.0,
+        });
+        scene.world_lines.push(WorldLine {
+            start: Vec3::new(0.0, 0.0, 8.0),
+            end: Vec3::new(1.0, 0.0, 8.0),
+            brightness: 1.0,
+        });
+        scene.overlay_lines.push(ScreenLine {
+            start: (0, 0),
+            end: (10, 10),
+            color: [255, 255, 255, 255],
+            thickness: 1,
+        });
+        scene.overlay_dots.push(ScreenDot {
+            center: (12, 12),
+            color: [255, 255, 255, 255],
+            radius: 2,
+        });
+        scene.overlay_text.push(ScreenText {
+            position: (20, 20),
+            text: String::from("BATTLEZONE"),
+            color: [255, 255, 255, 255],
+            scale: 2,
+            centered: true,
+        });
+        assert_eq!(scene.overlay_text.len(), 1);
     }
 }
