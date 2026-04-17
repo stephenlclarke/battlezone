@@ -17,7 +17,7 @@ use crate::{
     audio::AudioManager,
     constants::MAX_DT,
     game::Game,
-    input::{UpdateInput, poll_input},
+    input::{InputTracker, UpdateInput},
     kitty::KittyGraphics,
     render::Renderer,
     terminal::{TerminalSession, geometry},
@@ -27,7 +27,7 @@ pub fn run() -> Result<()> {
     KittyGraphics::ensure_supported()?;
 
     let mut stdout = stdout();
-    let _session = TerminalSession::enter(&mut stdout)?;
+    let session = TerminalSession::enter(&mut stdout)?;
     queue!(stdout, Clear(ClearType::All), MoveTo(0, 0))?;
     stdout.flush()?;
 
@@ -36,6 +36,7 @@ pub fn run() -> Result<()> {
     let mut graphics = KittyGraphics::new(terminal_geometry.cols, terminal_geometry.rows);
     let mut game = Game::new();
     let mut audio = AudioManager::new();
+    let mut input_tracker = InputTracker::new(session.keyboard_enhancement_supported());
     game.set_viewport(renderer.image_width(), renderer.image_height());
     for event in game.drain_events() {
         audio.handle_event(event);
@@ -55,7 +56,7 @@ pub fn run() -> Result<()> {
             &mut game,
         )?;
 
-        let input = poll_input()?;
+        let input = input_tracker.poll()?;
         if input.quit_requested {
             break;
         }

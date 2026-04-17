@@ -21,7 +21,7 @@ const GIF_CAPTURE_STEP: f32 = 0.2;
 const GIF_TITLE_HOLD_DELAY_CS: u16 = 70;
 const GIF_FULL_ATTRACT_CYCLE_SECONDS: f32 = 11.6;
 const GIF_RETURN_TO_TITLE_SECONDS: f32 = 2.8;
-const GIF_GAMEPLAY_READY_SECONDS: f32 = 1.8;
+const GIF_GAMEPLAY_READY_SECONDS: f32 = 2.2;
 const GIF_GAMEPLAY_SHOWCASE_SECONDS: f32 = 10.8;
 
 fn main() -> Result<()> {
@@ -77,7 +77,10 @@ fn capture_gameplay_screenshot(game: &mut Game, renderer: &mut Renderer) -> Rend
             ..UpdateInput::default()
         },
     );
-    for _ in 0..75 {
+    for _ in 0..84 {
+        game.update_with_input(ORIGINAL_FRAME_TIME, UpdateInput::default());
+    }
+    for _ in 0..60 {
         game.update_with_input(
             ORIGINAL_FRAME_TIME,
             UpdateInput {

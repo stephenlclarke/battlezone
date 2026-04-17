@@ -61,15 +61,22 @@ After installation, run the game with:
 
 ## Controls
 
+Arcade play controls:
+
 - `1` or `Enter`: start from the title screen
-- `E` / `D`: left tread forward / reverse
-- `I` / `K`: right tread forward / reverse
-- `W` or `Up`: both treads forward
-- `S` or `Down`: both treads reverse
-- `A` or `Left`: pivot left
+- `Q` / `A`: left tread forward / reverse
+- `P` / `L`: right tread forward / reverse
+- `Up`: both treads forward
+- `Down`: both treads reverse
+- `Left`: pivot left
 - `Right`: pivot right
 - `Space`: fire
-- `Q` or `Esc`: quit
+- `Esc`: quit
+
+On terminals with key press/release reporting, holding `Q` + `P` together drives
+both treads forward like `Up`, and holding `A` + `L` together drives both
+treads backward like `Down`. On simpler terminals, use the arrow keys for
+reliable combined-tread movement.
 
 ## XYZZY Mode
 
@@ -88,9 +95,9 @@ Extra keys while `xyzzy` mode is active:
   kill the player tank.
 - `f`: increase the hidden fire-rate level with each press, up to a capped
   maximum.
-- `a`: toggle autopilot. The tank will steer toward the current enemy, try to
-  maintain a firing solution, and bias away from incoming shots and exposed
-  positions.
+- `h`: toggle hidden autopilot. While active, the tank will steer toward the
+  current enemy, try to maintain a firing solution, and bias away from
+  incoming shots and exposed positions.
 
 ## Notes
 

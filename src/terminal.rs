@@ -3,13 +3,17 @@ use std::io::Stdout;
 use anyhow::Result;
 use crossterm::{
     cursor::{Hide, Show},
+    event::{KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags},
     execute,
     terminal::{
         EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode, size,
+        supports_keyboard_enhancement,
     },
 };
 
-pub struct TerminalSession;
+pub struct TerminalSession {
+    keyboard_enhancement_supported: bool,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TerminalGeometry {
@@ -22,15 +26,62 @@ pub struct TerminalGeometry {
 impl TerminalSession {
     pub fn enter(stdout: &mut Stdout) -> Result<Self> {
         enable_raw_mode()?;
-        execute!(stdout, EnterAlternateScreen, Hide)?;
-        Ok(Self)
+        let mut keyboard_enhancement_supported = false;
+        let result = (|| {
+            keyboard_enhancement_supported = supports_keyboard_enhancement().unwrap_or(false);
+            if keyboard_enhancement_supported {
+                execute!(
+                    stdout,
+                    EnterAlternateScreen,
+                    Hide,
+                    PushKeyboardEnhancementFlags(
+                        KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+                            | KeyboardEnhancementFlags::REPORT_EVENT_TYPES
+                    )
+                )?;
+            } else {
+                execute!(stdout, EnterAlternateScreen, Hide)?;
+            }
+            Ok(Self {
+                keyboard_enhancement_supported,
+            })
+        })();
+
+        if result.is_err() {
+            if keyboard_enhancement_supported {
+                let _ = execute!(
+                    stdout,
+                    PopKeyboardEnhancementFlags,
+                    Show,
+                    LeaveAlternateScreen
+                );
+            } else {
+                let _ = execute!(stdout, Show, LeaveAlternateScreen);
+            }
+            let _ = disable_raw_mode();
+        }
+
+        result
+    }
+
+    pub fn keyboard_enhancement_supported(&self) -> bool {
+        self.keyboard_enhancement_supported
     }
 }
 
 impl Drop for TerminalSession {
     fn drop(&mut self) {
         let mut stdout = std::io::stdout();
-        let _ = execute!(stdout, Show, LeaveAlternateScreen);
+        if self.keyboard_enhancement_supported {
+            let _ = execute!(
+                stdout,
+                PopKeyboardEnhancementFlags,
+                Show,
+                LeaveAlternateScreen
+            );
+        } else {
+            let _ = execute!(stdout, Show, LeaveAlternateScreen);
+        }
         let _ = disable_raw_mode();
     }
 }

@@ -20,7 +20,7 @@ const PLAYER_SHELL_SPEED: f32 = 92.0;
 const ENEMY_SHELL_SPEED: f32 = 74.0;
 const PLAYER_SHELL_LIFETIME: f32 = 2.2;
 const ENEMY_SHELL_LIFETIME: f32 = 2.8;
-const PLAYER_RESPAWN_DELAY: f32 = 1.8;
+const PLAYER_RESPAWN_DELAY: f32 = 2.0;
 const PLAYER_DYING_DELAY: f32 = 2.4;
 const WORLD_LIMIT: f32 = 124.0;
 const RADAR_RADIUS: i32 = 54;
@@ -38,15 +38,21 @@ const ARCADE_BLACK: [u8; 4] = [0, 0, 0, 255];
 const ENEMY_SCORE_FULL_AGGRESSION_DELTA: f32 = 7_000.0;
 const ENEMY_MAX_PATIENCE_SECONDS: f32 = 17.0;
 const ENEMY_SPAWN_FIRE_DELAY: f32 = 2.0;
-const BATTLEZONE_FRAME_RATE: f32 = 250.0 / 6.0;
-const OBJECT_SPIN_RATE: f32 = TAU / 32.0 * BATTLEZONE_FRAME_RATE;
+const ARCADE_OBJECT_TIMER_RATE: f32 = 15.0;
+const OBJECT_SPIN_RATE: f32 = TAU / 32.0 * ARCADE_OBJECT_TIMER_RATE;
 const SLOW_TANK_TREAD_ADVANCE_RATE: f32 = 0.9;
 const SLOW_TANK_MIN_ADVANCE_DISTANCE: f32 = 18.0;
 const SUPER_TANK_MIN_ADVANCE_DISTANCE: f32 = 28.0;
-const SAUCER_HEIGHT: f32 = 12.0;
+const SAUCER_HEIGHT: f32 = 0.0;
 const SAUCER_HIT_RADIUS: f32 = 4.2;
-const SAUCER_DIRECTION_CHANGE_MAX: f32 = 128.0 / BATTLEZONE_FRAME_RATE;
-const SAUCER_RESPAWN_DELAY_MAX: f32 = 256.0 / BATTLEZONE_FRAME_RATE;
+const SAUCER_DIRECTION_CHANGE_MAX: f32 = 128.0 / ARCADE_OBJECT_TIMER_RATE;
+const SAUCER_RESPAWN_DELAY_MAX: f32 = 256.0 / ARCADE_OBJECT_TIMER_RATE;
+const ENEMY_OUT_OF_RANGE_DISTANCE: f32 = WORLD_LIMIT - 4.0;
+const TANK_PRESSURE_TIMEOUT_MIN: f32 = 48.0;
+const TANK_PRESSURE_TIMEOUT_MAX: f32 = 64.0;
+const MISSILE_CHAIN_TIMEOUT_MIN: f32 = 16.0;
+const MISSILE_CHAIN_TIMEOUT_MAX: f32 = 32.0;
+const RESPAWN_ENEMY_SLEEP_SECONDS: f32 = 3.0;
 const EASTER_EGG_CODE: [char; 5] = ['x', 'y', 'z', 'z', 'y'];
 const SECRET_FIRE_LEVEL_MAX: u8 = 5;
 const SECRET_FIRE_COOLDOWNS: [f32; 6] = [0.0, 0.18, 0.12, 0.08, 0.05, 0.035];
@@ -511,6 +517,7 @@ struct Enemy {
     desired_heading: f32,
     radar_heading: f32,
     tread_phase: f32,
+    sleep_timer: f32,
     state_timer: f32,
     decision_timer: f32,
     shot_cooldown: f32,
@@ -550,7 +557,6 @@ struct EasterEggState {
     active: bool,
     sequence_index: usize,
     invincible: bool,
-    autopilot: bool,
     fire_level: u8,
 }
 
@@ -563,7 +569,6 @@ impl EasterEggState {
 
     fn reset_runtime_flags(&mut self) {
         self.invincible = false;
-        self.autopilot = false;
         self.fire_level = 0;
     }
 }
@@ -583,6 +588,8 @@ pub struct Game {
     player_projectiles: Vec<Projectile>,
     player_shot_cooldown: f32,
     enemy_projectile: Option<Projectile>,
+    tank_pressure_timer: f32,
+    missile_chain_timer: f32,
     saucer: Saucer,
     title_timer: f32,
     game_over_timer: f32,
@@ -595,6 +602,7 @@ pub struct Game {
     viewport_height: u32,
     initials: Option<InitialsEntry>,
     easter_egg: EasterEggState,
+    autopilot: bool,
     events: Vec<GameEvent>,
 }
 
@@ -632,6 +640,8 @@ impl Game {
             player_projectiles: Vec::new(),
             player_shot_cooldown: 0.0,
             enemy_projectile: None,
+            tank_pressure_timer: 0.0,
+            missile_chain_timer: 0.0,
             saucer: Saucer {
                 position: Vec3::new(0.0, SAUCER_HEIGHT, 0.0),
                 velocity: Vec3::new(0.0, 0.0, 0.0),
@@ -650,6 +660,7 @@ impl Game {
             viewport_height: 360,
             initials: None,
             easter_egg: EasterEggState::default(),
+            autopilot: false,
             events: vec![GameEvent::TitleScreenEntered],
         };
         game.reset_title_world();
@@ -668,6 +679,9 @@ impl Game {
     pub fn update_with_input(&mut self, dt: f32, input: UpdateInput) {
         if self.mode == Mode::Playing {
             self.handle_easter_egg_input(&input.typed_chars);
+            if self.easter_egg.active && input.autopilot_toggle_requested {
+                self.autopilot = !self.autopilot;
+            }
         }
         self.prompt_timer += dt;
         if self.prompt_timer >= 0.35 {
@@ -845,16 +859,26 @@ impl Game {
         }
 
         enemy.state_timer += dt;
+        enemy.sleep_timer = (enemy.sleep_timer - dt).max(0.0);
         enemy.decision_timer -= dt;
         enemy.shot_cooldown = (enemy.shot_cooldown - dt).max(0.0);
+        match enemy.kind {
+            EnemyKind::SlowTank | EnemyKind::SuperTank => {
+                self.tank_pressure_timer = (self.tank_pressure_timer - dt).max(0.0);
+            }
+            EnemyKind::Missile => {
+                self.missile_chain_timer = (self.missile_chain_timer - dt).max(0.0);
+            }
+        }
 
         match enemy.kind {
             EnemyKind::SlowTank | EnemyKind::SuperTank => {
+                let enemy_sleeping = enemy.sleep_timer > 0.0;
                 if enemy.kind == EnemyKind::SlowTank {
                     enemy.radar_heading = wrap_angle(enemy.radar_heading + OBJECT_SPIN_RATE * dt);
                 }
 
-                if enemy.decision_timer <= 0.0 {
+                if !enemy_sleeping && enemy.decision_timer <= 0.0 {
                     let aggression = self.enemy_aggression(enemy);
                     let aim = angle_to(enemy.position, self.player.position);
                     let inaccuracy = if enemy.kind == EnemyKind::SlowTank {
@@ -915,6 +939,7 @@ impl Game {
                 .abs();
                 if self.enemy_projectile.is_none()
                     && enemy.shot_cooldown <= 0.0
+                    && !enemy_sleeping
                     && self.player.spawn_grace_timer <= 0.0
                     && distance <= 84.0
                     && aim_error < lerp_f32(0.24, 0.08, aggression)
@@ -966,6 +991,27 @@ impl Game {
             && self.player.state == PlayerState::Alive
         {
             self.kill_player();
+        }
+
+        let distance_from_player = distance_flat(enemy.position, self.player.position);
+        if matches!(enemy.kind, EnemyKind::SlowTank | EnemyKind::SuperTank)
+            && self.tank_pressure_timer <= 0.0
+        {
+            self.enemy = Some(enemy);
+            self.enemy_projectile = None;
+            self.spawn_enemy(Some(EnemyKind::Missile));
+            return;
+        }
+        if enemy.kind == EnemyKind::Missile && distance_from_player >= ENEMY_OUT_OF_RANGE_DISTANCE {
+            let replacement = if self.missile_chain_timer > 0.0 {
+                EnemyKind::Missile
+            } else {
+                tank_kind(self.missile_launch_counter)
+            };
+            self.enemy = Some(enemy);
+            self.enemy_projectile = None;
+            self.spawn_enemy(Some(replacement));
+            return;
         }
 
         self.update_radar_ping(enemy.position);
@@ -1129,19 +1175,34 @@ impl Game {
     }
 
     fn respawn_player(&mut self) {
-        self.player.position = Vec3::new(0.0, 0.0, 0.0);
-        self.player.heading = 0.0;
+        self.place_player_randomly();
         self.player.state = PlayerState::Respawning;
         self.player.timer = PLAYER_RESPAWN_DELAY;
         self.player.spawn_grace_timer = PLAYER_RESPAWN_DELAY;
         self.player_projectiles.clear();
         self.player_shot_cooldown = 0.0;
         self.enemy_projectile = None;
-        self.spawn_enemy(Some(EnemyKind::SlowTank));
+
+        match self.enemy {
+            Some(enemy) if enemy.alive && enemy.kind == EnemyKind::Missile => {
+                self.spawn_enemy(Some(tank_kind(self.missile_launch_counter)));
+            }
+            Some(mut enemy) if enemy.alive => {
+                let random_heading = self.rng.f32() * TAU;
+                enemy.heading = random_heading;
+                enemy.desired_heading = random_heading;
+                enemy.sleep_timer = RESPAWN_ENEMY_SLEEP_SECONDS;
+                enemy.decision_timer = RESPAWN_ENEMY_SLEEP_SECONDS;
+                enemy.shot_cooldown = enemy.shot_cooldown.max(RESPAWN_ENEMY_SLEEP_SECONDS);
+                self.enemy = Some(enemy);
+            }
+            _ => self.spawn_enemy(None),
+        }
     }
 
     fn start_game(&mut self) {
         self.mode = Mode::Playing;
+        self.autopilot = false;
         self.score = 0;
         self.enemy_score = 0;
         self.lives = self.arcade.starting_lives;
@@ -1151,8 +1212,9 @@ impl Game {
         self.player_projectiles.clear();
         self.player_shot_cooldown = 0.0;
         self.enemy_projectile = None;
-        self.player.position = Vec3::new(0.0, 0.0, 0.0);
-        self.player.heading = 0.0;
+        self.tank_pressure_timer = 0.0;
+        self.missile_chain_timer = 0.0;
+        self.place_player_randomly();
         self.player.state = PlayerState::Respawning;
         self.player.timer = PLAYER_RESPAWN_DELAY;
         self.player.spawn_grace_timer = PLAYER_RESPAWN_DELAY;
@@ -1165,6 +1227,7 @@ impl Game {
     fn enter_title_mode(&mut self) {
         self.mode = Mode::Title;
         self.initials = None;
+        self.autopilot = false;
         self.easter_egg = EasterEggState::default();
         self.reset_title_world();
         self.events.push(GameEvent::TitleScreenEntered);
@@ -1181,6 +1244,7 @@ impl Game {
             desired_heading: PI,
             radar_heading: 0.0,
             tread_phase: 0.0,
+            sleep_timer: 0.0,
             state_timer: 0.0,
             decision_timer: 1.0,
             shot_cooldown: 0.0,
@@ -1236,6 +1300,7 @@ impl Game {
     }
 
     fn spawn_enemy(&mut self, preferred: Option<EnemyKind>) {
+        let previous_kind = self.enemy.map(|enemy| enemy.kind);
         let kind = preferred.unwrap_or_else(|| self.choose_enemy_kind());
         if kind == EnemyKind::Missile {
             self.missile_launch_counter = self.missile_launch_counter.wrapping_add(1);
@@ -1275,6 +1340,11 @@ impl Game {
                 desired_heading: heading,
                 radar_heading: 0.0,
                 tread_phase: 0.0,
+                sleep_timer: if self.player.state == PlayerState::Alive {
+                    0.0
+                } else {
+                    RESPAWN_ENEMY_SLEEP_SECONDS
+                },
                 state_timer: 0.0,
                 decision_timer: if self.player.state == PlayerState::Alive {
                     0.45
@@ -1286,6 +1356,7 @@ impl Game {
                 missile_vertical_velocity: 0.0,
                 alive: true,
             });
+            self.reset_enemy_cycle_timers(kind, previous_kind);
             return;
         }
 
@@ -1296,6 +1367,11 @@ impl Game {
             desired_heading: PI,
             radar_heading: 0.0,
             tread_phase: 0.0,
+            sleep_timer: if self.player.state == PlayerState::Alive {
+                0.0
+            } else {
+                RESPAWN_ENEMY_SLEEP_SECONDS
+            },
             state_timer: 0.0,
             decision_timer: 0.6,
             shot_cooldown: ENEMY_SPAWN_FIRE_DELAY,
@@ -1303,6 +1379,7 @@ impl Game {
             missile_vertical_velocity: 0.0,
             alive: true,
         });
+        self.reset_enemy_cycle_timers(kind, previous_kind);
     }
 
     fn choose_enemy_kind(&mut self) -> EnemyKind {
@@ -1348,6 +1425,56 @@ impl Game {
         self.rng.f32() * 24.0 - 12.0
     }
 
+    fn reset_enemy_cycle_timers(&mut self, kind: EnemyKind, previous_kind: Option<EnemyKind>) {
+        match kind {
+            EnemyKind::SlowTank | EnemyKind::SuperTank => {
+                self.tank_pressure_timer = self.random_tank_pressure_timeout();
+                self.missile_chain_timer = 0.0;
+            }
+            EnemyKind::Missile => {
+                self.tank_pressure_timer = 0.0;
+                if previous_kind != Some(EnemyKind::Missile) || self.missile_chain_timer <= 0.0 {
+                    self.missile_chain_timer = self.random_missile_chain_timeout();
+                }
+            }
+        }
+    }
+
+    fn random_tank_pressure_timeout(&mut self) -> f32 {
+        TANK_PRESSURE_TIMEOUT_MIN
+            + self.rng.f32() * (TANK_PRESSURE_TIMEOUT_MAX - TANK_PRESSURE_TIMEOUT_MIN)
+    }
+
+    fn random_missile_chain_timeout(&mut self) -> f32 {
+        MISSILE_CHAIN_TIMEOUT_MIN
+            + self.rng.f32() * (MISSILE_CHAIN_TIMEOUT_MAX - MISSILE_CHAIN_TIMEOUT_MIN)
+    }
+
+    fn place_player_randomly(&mut self) {
+        self.player.position = self.random_player_spawn_position();
+        self.player.heading = self.rng.f32() * TAU;
+    }
+
+    fn random_player_spawn_position(&mut self) -> Vec3 {
+        for _ in 0..128 {
+            let position = Vec3::new(
+                self.rng.f32() * WORLD_LIMIT * 2.0 - WORLD_LIMIT,
+                0.0,
+                self.rng.f32() * WORLD_LIMIT * 2.0 - WORLD_LIMIT,
+            );
+            let clear_of_enemy = self.enemy.is_none_or(|enemy| {
+                !enemy.alive
+                    || distance_flat(position, enemy_position(enemy))
+                        > PLAYER_RADIUS + enemy_radius(enemy.kind) + 6.0
+            });
+            if clear_of_enemy && self.position_is_walkable(position, PLAYER_RADIUS) {
+                return clamp_to_world(position);
+            }
+        }
+
+        Vec3::new(0.0, 0.0, 0.0)
+    }
+
     fn enemy_spawn_aggression(&self) -> f32 {
         ((self.score as f32 - self.enemy_score as f32) / ENEMY_SCORE_FULL_AGGRESSION_DELTA)
             .clamp(0.0, 1.0)
@@ -1364,15 +1491,12 @@ impl Game {
 
     fn handle_easter_egg_input(&mut self, typed_chars: &[char]) {
         for &character in typed_chars {
-            let matched_secret = self.update_easter_egg_sequence(character);
+            self.update_easter_egg_sequence(character);
             if !self.easter_egg.active {
                 continue;
             }
 
             match character {
-                'a' if !matched_secret => {
-                    self.easter_egg.autopilot = !self.easter_egg.autopilot;
-                }
                 'g' => {
                     self.easter_egg.invincible = !self.easter_egg.invincible;
                 }
@@ -1393,6 +1517,7 @@ impl Game {
             self.easter_egg.sequence_index += 1;
             if self.easter_egg.sequence_index == EASTER_EGG_CODE.len() {
                 self.easter_egg.toggle();
+                self.autopilot = false;
                 self.player_shot_cooldown = 0.0;
             }
             return true;
@@ -1402,13 +1527,8 @@ impl Game {
         character == EASTER_EGG_CODE[0]
     }
 
-    fn effective_play_input(&self, mut input: UpdateInput) -> UpdateInput {
-        if self.easter_egg.active && input.typed_chars.contains(&'a') {
-            input.turn_left = false;
-            input.initials_previous = false;
-        }
-
-        if self.easter_egg.autopilot && self.player.state == PlayerState::Alive {
+    fn effective_play_input(&self, input: UpdateInput) -> UpdateInput {
+        if self.autopilot && self.player.state == PlayerState::Alive {
             return self.autopilot_input();
         }
 
@@ -1423,22 +1543,41 @@ impl Game {
         SECRET_FIRE_COOLDOWNS[self.easter_egg.fire_level as usize]
     }
 
-    fn easter_egg_status_text(&self) -> Option<String> {
+    fn xyzzy_indicator_rows(&self) -> Option<Vec<(String, [u8; 4])>> {
         if !self.easter_egg.active {
             return None;
         }
 
-        let mut parts = vec![String::from("XYZZY")];
-        if self.easter_egg.invincible {
-            parts.push(String::from("GOD"));
-        }
-        if self.easter_egg.fire_level > 0 {
-            parts.push(format!("F{}", self.easter_egg.fire_level + 1));
-        }
-        if self.easter_egg.autopilot {
-            parts.push(String::from("AUTO"));
-        }
-        Some(parts.join(" "))
+        Some(vec![
+            (String::from("XYZZY MODE"), WARNING_COLOR),
+            (
+                format!("FIRE RATE {}", self.easter_egg.fire_level + 1),
+                SCREEN_COLOR,
+            ),
+            (
+                format!(
+                    "GOD {}",
+                    if self.easter_egg.invincible {
+                        "ON"
+                    } else {
+                        "OFF"
+                    }
+                ),
+                if self.easter_egg.invincible {
+                    WARNING_COLOR
+                } else {
+                    SCREEN_COLOR_DIM
+                },
+            ),
+            (
+                format!("AUTO {}", if self.autopilot { "ON" } else { "OFF" }),
+                if self.autopilot {
+                    WARNING_COLOR
+                } else {
+                    SCREEN_COLOR_DIM
+                },
+            ),
+        ])
     }
 
     fn autopilot_input(&self) -> UpdateInput {
@@ -1711,7 +1850,7 @@ impl Game {
         self.add_high_score_rows(&mut scene);
         self.push_arcade_text(
             &mut scene,
-            attract::BONUS_TANK_LABEL.position,
+            self.high_score_bonus_label_position(),
             arcade::bonus_tank_label(),
             attract::BONUS_TANK_LABEL.size,
             SCREEN_COLOR,
@@ -1855,6 +1994,20 @@ impl Game {
         }
     }
 
+    fn high_score_bonus_label_position(&self) -> (i16, i16) {
+        let last_row_y =
+            self.high_scores
+                .last()
+                .map_or(attract::BONUS_TANK_LABEL.position.1, |_| {
+                    attract::HIGH_SCORE_LIST_START.1
+                        + (self.high_scores.len() as i16 - 1) * attract::HIGH_SCORE_ROW_DELTA.1
+                });
+        (
+            attract::BONUS_TANK_LABEL.position.0,
+            (last_row_y - 64).min(attract::BONUS_TANK_LABEL.position.1),
+        )
+    }
+
     fn add_title_logo(&self, scene: &mut Scene) {
         let progress = (self.title_timer.rem_euclid(ATTRACT_CYCLE_DURATION)
             / TITLE_SCREEN_DURATION)
@@ -1968,18 +2121,7 @@ impl Game {
             scale: 1,
             centered: false,
         });
-        if let Some(status) = self.easter_egg_status_text() {
-            scene.overlay_text.push(ScreenText {
-                position: (
-                    self.viewport_width as i32 - HUD_MARGIN * 7,
-                    self.viewport_height as i32 - 28,
-                ),
-                text: status,
-                color: WARNING_COLOR,
-                scale: 1,
-                centered: false,
-            });
-        }
+        self.add_xyzzy_indicator(scene);
 
         if let Some(message) = self.status_message() {
             scene.overlay_text.push(ScreenText {
@@ -1992,6 +2134,29 @@ impl Game {
         }
 
         self.add_radar(scene);
+    }
+
+    fn add_xyzzy_indicator(&self, scene: &mut Scene) {
+        let Some(rows) = self.xyzzy_indicator_rows() else {
+            return;
+        };
+
+        let scale = 1u8;
+        let line_height = 10 * i32::from(scale);
+        let bottom_y = self.viewport_height as i32 - 28;
+        let start_y = bottom_y - (rows.len() as i32 - 1) * line_height;
+        for (index, (text, color)) in rows.into_iter().enumerate() {
+            scene.overlay_text.push(ScreenText {
+                position: (
+                    self.viewport_width as i32 - HUD_MARGIN - hud_text_width(&text, scale),
+                    start_y + index as i32 * line_height,
+                ),
+                text,
+                color,
+                scale,
+                centered: false,
+            });
+        }
     }
 
     fn add_radar(&self, scene: &mut Scene) {
@@ -2550,6 +2715,11 @@ fn set_tread_axis(input: &mut UpdateInput, axis: i8, left: bool) {
     }
 }
 
+fn hud_text_width(text: &str, scale: u8) -> i32 {
+    let scale = i32::from(scale.max(1));
+    (text.chars().count() as i32 * 6 * scale).saturating_sub(scale)
+}
+
 fn enemy_radius(kind: EnemyKind) -> f32 {
     match kind {
         EnemyKind::SlowTank => 4.0,
@@ -2662,6 +2832,7 @@ mod tests {
             desired_heading: 0.0,
             radar_heading: 0.0,
             tread_phase: 0.0,
+            sleep_timer: 0.0,
             state_timer: 0.0,
             decision_timer: 0.0,
             shot_cooldown: 0.0,
@@ -2715,18 +2886,19 @@ mod tests {
         );
         assert!(game.easter_egg.active);
         assert!(!game.easter_egg.invincible);
-        assert!(!game.easter_egg.autopilot);
+        assert!(!game.autopilot);
         assert_eq!(game.easter_egg.fire_level, 0);
 
         game.update_with_input(
             0.0,
             UpdateInput {
-                typed_chars: vec!['g', 'f', 'a'],
+                typed_chars: vec!['g', 'f'],
+                autopilot_toggle_requested: true,
                 ..UpdateInput::default()
             },
         );
         assert!(game.easter_egg.invincible);
-        assert!(game.easter_egg.autopilot);
+        assert!(game.autopilot);
         assert_eq!(game.easter_egg.fire_level, 1);
 
         game.update_with_input(
@@ -2738,7 +2910,7 @@ mod tests {
         );
         assert!(!game.easter_egg.active);
         assert!(!game.easter_egg.invincible);
-        assert!(!game.easter_egg.autopilot);
+        assert!(!game.autopilot);
         assert_eq!(game.easter_egg.fire_level, 0);
 
         game.update_with_input(
@@ -2750,7 +2922,7 @@ mod tests {
         );
         assert!(game.easter_egg.active);
         assert!(!game.easter_egg.invincible);
-        assert!(!game.easter_egg.autopilot);
+        assert!(!game.autopilot);
         assert_eq!(game.easter_egg.fire_level, 0);
     }
 
@@ -2812,5 +2984,270 @@ mod tests {
         game.update_saucer(0.02);
         assert_eq!(game.saucer.state, SaucerState::Alive);
         assert_ne!(game.saucer.position, initial_position);
+    }
+
+    #[test]
+    fn saucer_uses_arcade_ground_and_timer_ranges() {
+        assert_eq!(super::SAUCER_HEIGHT, 0.0);
+        assert!((super::SAUCER_DIRECTION_CHANGE_MAX - (128.0 / 15.0)).abs() < 0.001);
+        assert!((super::SAUCER_RESPAWN_DELAY_MAX - (256.0 / 15.0)).abs() < 0.001);
+    }
+
+    #[test]
+    fn respawn_keeps_alive_tank_but_randomizes_player_spawn() {
+        let mut game = Game::with_seed(7);
+        game.start_game();
+        game.enemy = Some(super::Enemy {
+            kind: EnemyKind::SlowTank,
+            position: crate::math::Vec3::new(0.0, 0.0, 72.0),
+            heading: 0.0,
+            desired_heading: 0.0,
+            radar_heading: 0.0,
+            tread_phase: 0.0,
+            sleep_timer: 0.0,
+            state_timer: 0.0,
+            decision_timer: 0.0,
+            shot_cooldown: 0.0,
+            missile_height: 0.0,
+            missile_vertical_velocity: 0.0,
+            alive: true,
+        });
+
+        game.respawn_player();
+
+        assert_eq!(
+            game.enemy.expect("enemy should remain active").kind,
+            EnemyKind::SlowTank
+        );
+        assert_eq!(
+            game.enemy
+                .expect("enemy should remain active")
+                .decision_timer,
+            super::RESPAWN_ENEMY_SLEEP_SECONDS
+        );
+        assert_eq!(
+            game.enemy.expect("enemy should remain active").heading,
+            game.enemy
+                .expect("enemy should remain active")
+                .desired_heading
+        );
+        assert!(
+            game.enemy
+                .expect("enemy should remain active")
+                .shot_cooldown
+                >= super::RESPAWN_ENEMY_SLEEP_SECONDS
+        );
+        assert!(game.position_is_walkable(game.player.position, super::PLAYER_RADIUS));
+        assert_ne!(game.player.position, Vec3::new(0.0, 0.0, 0.0));
+    }
+
+    #[test]
+    fn respawn_replaces_active_missile_with_tank() {
+        let mut game = Game::with_seed(11);
+        game.start_game();
+        game.enemy = Some(super::Enemy {
+            kind: EnemyKind::Missile,
+            position: crate::math::Vec3::new(0.0, 0.0, 96.0),
+            heading: 0.0,
+            desired_heading: 0.0,
+            radar_heading: 0.0,
+            tread_phase: 0.0,
+            sleep_timer: 0.0,
+            state_timer: 0.0,
+            decision_timer: 0.0,
+            shot_cooldown: 0.0,
+            missile_height: 0.0,
+            missile_vertical_velocity: 0.0,
+            alive: true,
+        });
+
+        game.respawn_player();
+
+        assert_ne!(
+            game.enemy.expect("respawn should create a tank").kind,
+            EnemyKind::Missile
+        );
+    }
+
+    #[test]
+    fn existing_tank_cannot_fire_during_respawn_sleep_window() {
+        let mut game = Game::with_seed(19);
+        game.start_game();
+        game.player.state = PlayerState::Respawning;
+        game.player.spawn_grace_timer = 0.0;
+        game.enemy_projectile = None;
+        game.enemy = Some(super::Enemy {
+            kind: EnemyKind::SlowTank,
+            position: crate::math::Vec3::new(0.0, 0.0, 48.0),
+            heading: super::angle_to(crate::math::Vec3::new(0.0, 0.0, 48.0), game.player.position),
+            desired_heading: 1.25,
+            radar_heading: 0.0,
+            tread_phase: 0.0,
+            sleep_timer: 1.0,
+            state_timer: 0.0,
+            decision_timer: 1.0,
+            shot_cooldown: 0.0,
+            missile_height: 0.0,
+            missile_vertical_velocity: 0.0,
+            alive: true,
+        });
+
+        game.update_enemy(0.0);
+
+        assert!(game.enemy_projectile.is_none());
+    }
+
+    #[test]
+    fn tank_pressure_replaces_tank_with_missile() {
+        let mut game = Game::with_seed(13);
+        game.start_game();
+        game.player.state = PlayerState::Alive;
+        game.player.spawn_grace_timer = 0.0;
+        game.enemy = Some(super::Enemy {
+            kind: EnemyKind::SlowTank,
+            position: crate::math::Vec3::new(0.0, 0.0, 72.0),
+            heading: 0.0,
+            desired_heading: 0.0,
+            radar_heading: 0.0,
+            tread_phase: 0.0,
+            sleep_timer: 0.0,
+            state_timer: 0.0,
+            decision_timer: 1.0,
+            shot_cooldown: 2.0,
+            missile_height: 0.0,
+            missile_vertical_velocity: 0.0,
+            alive: true,
+        });
+        game.tank_pressure_timer = 0.0;
+
+        game.update_enemy(0.0);
+
+        assert_eq!(
+            game.enemy.expect("pressure should replace tank").kind,
+            EnemyKind::Missile
+        );
+    }
+
+    #[test]
+    fn evaded_missile_chains_until_timer_expires() {
+        let mut game = Game::with_seed(17);
+        game.start_game();
+        game.player.state = PlayerState::Alive;
+        game.player.position = Vec3::new(0.0, 0.0, 0.0);
+        game.enemy = Some(super::Enemy {
+            kind: EnemyKind::Missile,
+            position: crate::math::Vec3::new(0.0, 0.0, 140.0),
+            heading: 0.0,
+            desired_heading: 0.0,
+            radar_heading: 0.0,
+            tread_phase: 0.0,
+            sleep_timer: 0.0,
+            state_timer: 0.0,
+            decision_timer: 0.0,
+            shot_cooldown: 0.0,
+            missile_height: 0.0,
+            missile_vertical_velocity: 0.0,
+            alive: true,
+        });
+        game.missile_chain_timer = 8.0;
+
+        game.update_enemy(0.0);
+        assert_eq!(
+            game.enemy.expect("evaded missile should chain").kind,
+            EnemyKind::Missile
+        );
+
+        game.enemy = Some(super::Enemy {
+            kind: EnemyKind::Missile,
+            position: crate::math::Vec3::new(0.0, 0.0, 140.0),
+            heading: 0.0,
+            desired_heading: 0.0,
+            radar_heading: 0.0,
+            tread_phase: 0.0,
+            sleep_timer: 0.0,
+            state_timer: 0.0,
+            decision_timer: 0.0,
+            shot_cooldown: 0.0,
+            missile_height: 0.0,
+            missile_vertical_velocity: 0.0,
+            alive: true,
+        });
+        game.player.position = Vec3::new(0.0, 0.0, 0.0);
+        game.missile_chain_timer = 0.0;
+
+        game.update_enemy(0.0);
+        assert_ne!(
+            game.enemy
+                .expect("expired chain should fall back to tank")
+                .kind,
+            EnemyKind::Missile
+        );
+    }
+
+    #[test]
+    fn high_score_bonus_label_sits_below_the_table() {
+        let game = Game::new();
+        let position = game.high_score_bonus_label_position();
+        let last_row_y = super::attract::HIGH_SCORE_LIST_START.1
+            + (game.high_scores.len() as i16 - 1) * super::attract::HIGH_SCORE_ROW_DELTA.1;
+        assert!(position.1 < last_row_y);
+    }
+
+    #[test]
+    fn autopilot_toggle_requires_xyzzy_mode() {
+        let mut game = Game::new();
+        game.start_game();
+
+        game.update_with_input(
+            0.0,
+            UpdateInput {
+                autopilot_toggle_requested: true,
+                ..UpdateInput::default()
+            },
+        );
+        assert!(!game.autopilot);
+
+        game.update_with_input(
+            0.0,
+            UpdateInput {
+                typed_chars: vec!['x', 'y', 'z', 'z', 'y'],
+                ..UpdateInput::default()
+            },
+        );
+        assert!(game.easter_egg.active);
+
+        game.update_with_input(
+            0.0,
+            UpdateInput {
+                autopilot_toggle_requested: true,
+                ..UpdateInput::default()
+            },
+        );
+        assert!(game.autopilot);
+    }
+
+    #[test]
+    fn xyzzy_indicator_shows_fire_god_and_auto_states() {
+        let mut game = Game::new();
+        assert!(game.xyzzy_indicator_rows().is_none());
+
+        game.easter_egg.active = true;
+        game.easter_egg.fire_level = 2;
+        game.easter_egg.invincible = true;
+        game.autopilot = true;
+
+        let rows = game
+            .xyzzy_indicator_rows()
+            .expect("xyzzy rows should be present");
+        let labels = rows.into_iter().map(|(text, _)| text).collect::<Vec<_>>();
+        assert_eq!(
+            labels,
+            vec![
+                String::from("XYZZY MODE"),
+                String::from("FIRE RATE 3"),
+                String::from("GOD ON"),
+                String::from("AUTO ON"),
+            ]
+        );
     }
 }
