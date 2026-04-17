@@ -16,8 +16,9 @@ use battlezone::{
 use gif::{Encoder, Frame, Repeat};
 use png::{BitDepth, ColorType, Compression, Encoder as PngEncoder};
 
-const GIF_FRAME_DELAY_CS: u16 = 8;
-const GIF_DURATION_SECONDS: f32 = 6.0;
+const GIF_FRAME_DELAY_CS: u16 = 15;
+const GIF_DURATION_SECONDS: f32 = 4.0;
+const GIF_CAPTURE_STEP: f32 = 0.15;
 
 fn main() -> Result<()> {
     let screenshot_path = std::env::args_os()
@@ -32,22 +33,32 @@ fn main() -> Result<()> {
     ensure_parent_dir(&screenshot_path)?;
     ensure_parent_dir(&gif_path)?;
 
-    let geometry = TerminalGeometry {
+    let screenshot_geometry = TerminalGeometry {
         cols: 96,
         rows: 40,
         pixel_width: 960,
         pixel_height: 720,
     };
-    let mut renderer = Renderer::new(geometry);
+    let gif_geometry = TerminalGeometry {
+        cols: 72,
+        rows: 30,
+        pixel_width: 640,
+        pixel_height: 480,
+    };
+    let mut screenshot_renderer = Renderer::new(screenshot_geometry);
     let mut game = Game::with_seed(0xBADD1E);
-    game.set_viewport(renderer.image_width(), renderer.image_height());
+    game.set_viewport(
+        screenshot_renderer.image_width(),
+        screenshot_renderer.image_height(),
+    );
 
-    let screenshot = capture_gameplay_screenshot(&mut game, &mut renderer);
+    let screenshot = capture_gameplay_screenshot(&mut game, &mut screenshot_renderer);
     write_png(&screenshot_path, &screenshot)?;
 
+    let mut gif_renderer = Renderer::new(gif_geometry);
     let mut game = Game::with_seed(0xBADD1E);
-    game.set_viewport(renderer.image_width(), renderer.image_height());
-    write_attract_gif(&gif_path, &mut game, &mut renderer)?;
+    game.set_viewport(gif_renderer.image_width(), gif_renderer.image_height());
+    write_attract_gif(&gif_path, &mut game, &mut gif_renderer)?;
 
     println!("wrote {}", screenshot_path.display());
     println!("wrote {}", gif_path.display());
@@ -88,7 +99,8 @@ fn write_attract_gif(path: &Path, game: &mut Game, renderer: &mut Renderer) -> R
         .set_repeat(Repeat::Infinite)
         .context("setting gif repeat mode")?;
 
-    let frames = (GIF_DURATION_SECONDS / ORIGINAL_FRAME_TIME) as usize;
+    let frames = (GIF_DURATION_SECONDS / GIF_CAPTURE_STEP) as usize;
+    let advance_steps = (GIF_CAPTURE_STEP / ORIGINAL_FRAME_TIME).round() as usize;
     for _ in 0..frames {
         let image = renderer.render(&game.frame());
         let mut pixels = image.pixels.clone();
@@ -96,7 +108,9 @@ fn write_attract_gif(path: &Path, game: &mut Game, renderer: &mut Renderer) -> R
             Frame::from_rgba_speed(image.width as u16, image.height as u16, &mut pixels, 10);
         frame.delay = GIF_FRAME_DELAY_CS;
         encoder.write_frame(&frame).context("writing gif frame")?;
-        game.update_with_input(ORIGINAL_FRAME_TIME, UpdateInput::default());
+        for _ in 0..advance_steps {
+            game.update_with_input(ORIGINAL_FRAME_TIME, UpdateInput::default());
+        }
     }
     Ok(())
 }
