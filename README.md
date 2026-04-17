@@ -17,17 +17,21 @@
 This is a self-contained Rust implementation of Atari's original Battlezone,
 rendered through the Kitty graphics protocol.
 
-The current game uses a native Rust state machine for the title screen,
-high-score entry, battlefield layout, radar, enemy behaviors, saucer timings,
-and scoring/lives flow. During development the obstacle layout and rule tables
-were extracted from the original arcade ROM set, but the shipped application no
-longer depends on any ROM files at runtime.
+The current game uses a native Rust state machine for twin-stick tread
+movement, title and high-score screens, battlefield layout, radar, enemy
+behaviors, saucer timings, and scoring/lives flow. During development the
+obstacle layout, attract-screen data, and rule tables were extracted from the
+original arcade ROM set, but the shipped application no longer depends on any
+ROM files at runtime.
 
 ![Battlezone](docs/battlezone.png)
 
 <!-- markdownlint-disable MD033 -->
 <p align="center">
-  <img src="docs/start-sequence.gif" alt="Battlezone attract sequence" />
+  <img
+    src="docs/start-sequence.gif"
+    alt="Battlezone attract, title, high-score, and gameplay sequence"
+  />
 </p>
 <!-- markdownlint-enable MD033 -->
 
@@ -57,36 +61,74 @@ After installation, run the game with:
 
 ## Controls
 
-- `Enter`: start from the title screen
-- `W` or `Up`: drive forward
-- `S` or `Down`: reverse
-- `A` or `Left`: rotate left
-- `D` or `Right`: rotate right
+- `1` or `Enter`: start from the title screen
+- `E` / `D`: left tread forward / reverse
+- `I` / `K`: right tread forward / reverse
+- `W` or `Up`: both treads forward
+- `S` or `Down`: both treads reverse
+- `A` or `Left`: pivot left
+- `Right`: pivot right
 - `Space`: fire
 - `Q` or `Esc`: quit
+
+## XYZZY Mode
+
+After starting a game, type `x`, `y`, `z`, `z`, `y` to toggle hidden
+`xyzzy` mode on or off.
+
+Typing `xyzzy` a second time turns the mode off and resets every secret option
+back to its default state. If you activate `xyzzy` again later, it starts clean
+with all hidden options disabled and the fire-rate boost reset to its base
+level.
+
+Extra keys while `xyzzy` mode is active:
+
+- `g`: toggle god mode. While active, enemy units are drawn in red, enemy
+  projectiles are orange, your projectiles are yellow, and enemy fire cannot
+  kill the player tank.
+- `f`: increase the hidden fire-rate level with each press, up to a capped
+  maximum.
+- `a`: toggle autopilot. The tank will steer toward the current enemy, try to
+  maintain a firing solution, and bias away from incoming shots and exposed
+  positions.
 
 ## Notes
 
 - This project is a native implementation, not a 6502 emulator.
 - The battlefield obstacle coordinates, bonus-tank defaults, missile threshold,
-  and attract-screen strings were extracted from the original arcade data and
-  flattened into `assets/arcade/`.
+  attract-screen strings, title/high-score layouts, and title-logo meshes were
+  extracted from the original arcade data and flattened into native Rust
+  modules/assets.
 - Audio is synthesized in-process with `rodio`, so no platform-specific helper
   binaries are required.
 - If `battlezone` is not found after installation, ensure `~/.cargo/bin` is on
   your `PATH`.
 
-## ROM References
+## Source Materials
 
-These references were used to extract the battlefield tables and original rule
-defaults while keeping the final runtime self-contained:
+These references were used for reverse engineering, rules verification, attract
+screen reconstruction, and extraction of historical arcade data while keeping
+the final runtime self-contained:
 
 - [Battlezone disassembly project](https://6502disassembly.com/va-battlezone/):
-  annotated ROM listing, obstacle tables, score strings, and gameplay notes.
-- [MAME Battlezone driver](https://raw.githubusercontent.com/mamedev/mame/master/src/mame/atari/bzone.cpp):
-  machine layout, memory map, and dip-switch defaults.
+  primary gameplay notes covering scoring, enemy progression, saucer behavior,
+  sound behavior, battlefield layout, and arcade quirks.
+- [Battlezone strings and characters](https://6502disassembly.com/va-battlezone/strings.html):
+  exact title-screen, high-score, and initials-entry strings plus the arcade
+  character set used to match the original text layout.
+- [Battlezone objects](https://6502disassembly.com/va-battlezone/objects.html):
+  object index list and vector-object notes used to recreate obstacles, tanks,
+  missile/saucer shapes, and the three-part Battlezone title logo.
 - [Battlezone revision notes](https://6502disassembly.com/va-battlezone/rev1.html):
-  revision history and checksum notes for the program ROMs.
+  revision-specific behavior notes, including the high-score tank-icon change
+  between ROM revisions.
+- [MAME Battlezone driver](https://raw.githubusercontent.com/mamedev/mame/master/src/mame/atari/bzone.cpp):
+  machine layout, memory map, and default DIP-switch settings for the arcade
+  cabinet.
+- [Battle Zone (rev 2) ROM archive](https://www.retrostic.com/roms/mame/battle-zone-41678):
+  source page for the historical `bzone.zip` MAME ROM set used during
+  extraction and reference work. The shipped game does not bundle or load ROM
+  files at runtime.
 
 ## Platform Support
 

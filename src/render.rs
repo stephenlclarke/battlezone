@@ -31,6 +31,7 @@ pub struct WorldLine {
     pub start: Vec3,
     pub end: Vec3,
     pub brightness: f32,
+    pub color: Option<[u8; 4]>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -60,11 +61,18 @@ pub struct ScreenText {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Scene {
     pub camera: Camera,
+    pub background: BackgroundStyle,
     pub world_lines: Vec<WorldLine>,
     pub overlay_lines: Vec<ScreenLine>,
     pub overlay_dots: Vec<ScreenDot>,
     pub overlay_text: Vec<ScreenText>,
     pub show_crosshair: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BackgroundStyle {
+    GradientHorizon,
+    Solid([u8; 4]),
 }
 
 pub struct RenderedImage {
@@ -92,6 +100,7 @@ impl Scene {
     pub fn empty(camera: Camera) -> Self {
         Self {
             camera,
+            background: BackgroundStyle::GradientHorizon,
             world_lines: Vec::new(),
             overlay_lines: Vec::new(),
             overlay_dots: Vec::new(),
@@ -125,9 +134,14 @@ impl Renderer {
 
     pub fn render(&self, scene: &Scene) -> RenderedImage {
         let mut buffer = PixelBuffer::new(self.image_width as usize, self.image_height as usize);
-        let horizon = self.image_height / 2;
-        buffer.fill_gradient(horizon);
-        buffer.draw_horizon(horizon, HORIZON_COLOR);
+        match scene.background {
+            BackgroundStyle::GradientHorizon => {
+                let horizon = self.image_height / 2;
+                buffer.fill_gradient(horizon);
+                buffer.draw_horizon(horizon, HORIZON_COLOR);
+            }
+            BackgroundStyle::Solid(color) => buffer.fill_solid(Color::from_rgba(color)),
+        }
 
         for line in &scene.world_lines {
             if let Some(((x0, y0), (x1, y1), depth)) = project_segment(
@@ -138,7 +152,7 @@ impl Renderer {
                 self.image_height,
                 self.focal,
             ) {
-                let color = world_color(depth, line.brightness);
+                let color = world_color(depth, line.brightness, line.color);
                 let thickness = depth_thickness(depth);
                 buffer.draw_line(x0, y0, x1, y1, color, thickness);
             }
@@ -200,6 +214,14 @@ impl PixelBuffer {
                 lerp_color(GROUND_FAR, GROUND_NEAR, distance)
             };
 
+            for x in 0..self.width {
+                self.put_pixel(x as i32, y as i32, color);
+            }
+        }
+    }
+
+    fn fill_solid(&mut self, color: Color) {
+        for y in 0..self.height {
             for x in 0..self.width {
                 self.put_pixel(x as i32, y as i32, color);
             }
@@ -380,7 +402,10 @@ fn lerp_color(start: Color, end: Color, t: f32) -> Color {
     )
 }
 
-fn world_color(depth: f32, brightness: f32) -> Color {
+fn world_color(depth: f32, brightness: f32, override_color: Option<[u8; 4]>) -> Color {
+    if let Some(color) = override_color {
+        return Color::from_rgba(color);
+    }
     let base = if depth < 8.0 {
         Color(170, 255, 170, 255)
     } else if depth < 20.0 {
@@ -579,6 +604,8 @@ fn glyph_rows(glyph: char) -> [u8; 7] {
         '.' => [0x00, 0x00, 0x00, 0x00, 0x00, 0x06, 0x06],
         ':' => [0x00, 0x06, 0x06, 0x00, 0x06, 0x06, 0x00],
         '!' => [0x04, 0x04, 0x04, 0x04, 0x04, 0x00, 0x04],
+        '(' => [0x02, 0x04, 0x08, 0x08, 0x08, 0x04, 0x02],
+        ')' => [0x08, 0x04, 0x02, 0x02, 0x02, 0x04, 0x08],
         '>' => [0x10, 0x08, 0x04, 0x02, 0x04, 0x08, 0x10],
         '<' => [0x01, 0x02, 0x04, 0x08, 0x04, 0x02, 0x01],
         '/' => [0x01, 0x02, 0x04, 0x08, 0x10, 0x00, 0x00],
@@ -668,6 +695,7 @@ mod tests {
             start: Vec3::new(0.0, 0.0, 8.0),
             end: Vec3::new(1.0, 0.0, 8.0),
             brightness: 1.0,
+            color: None,
         });
         scene.overlay_lines.push(ScreenLine {
             start: (0, 0),

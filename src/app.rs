@@ -64,7 +64,7 @@ pub fn run() -> Result<()> {
         last_tick = Instant::now();
         accumulator = (accumulator + dt).min(frame_time * 6.0);
 
-        let mut step_input = input;
+        let mut step_input = input.clone();
         let mut updated = false;
         while accumulator >= frame_time {
             game.update_with_input(frame_time, step_input);
@@ -72,7 +72,7 @@ pub fn run() -> Result<()> {
                 audio.handle_event(event);
             }
             accumulator -= frame_time;
-            step_input = repeated_input(input);
+            step_input = repeated_input(input.clone());
             updated = true;
         }
 
@@ -122,6 +122,10 @@ fn repeated_input(input: UpdateInput) -> UpdateInput {
         backward: input.backward,
         turn_left: input.turn_left,
         turn_right: input.turn_right,
+        left_tread_forward: input.left_tread_forward,
+        left_tread_backward: input.left_tread_backward,
+        right_tread_forward: input.right_tread_forward,
+        right_tread_backward: input.right_tread_backward,
         ..UpdateInput::default()
     }
 }
