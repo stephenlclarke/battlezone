@@ -511,21 +511,7 @@ fn clip_to_viewport(
         }
 
         let code_out = if code0 != 0 { code0 } else { code1 };
-        let (mut x, mut y) = (0.0, 0.0);
-
-        if code_out & OUT_TOP != 0 {
-            x = x0 + (x1 - x0) * (0.0 - y0) / (y1 - y0);
-            y = 0.0;
-        } else if code_out & OUT_BOTTOM != 0 {
-            x = x0 + (x1 - x0) * ((height - 1) as f32 - y0) / (y1 - y0);
-            y = (height - 1) as f32;
-        } else if code_out & OUT_RIGHT != 0 {
-            y = y0 + (y1 - y0) * ((width - 1) as f32 - x0) / (x1 - x0);
-            x = (width - 1) as f32;
-        } else if code_out & OUT_LEFT != 0 {
-            y = y0 + (y1 - y0) * (0.0 - x0) / (x1 - x0);
-            x = 0.0;
-        }
+        let (x, y) = clip_intersection(code_out, x0, y0, x1, y1, width, height);
 
         if code_out == code0 {
             x0 = x;
@@ -536,6 +522,32 @@ fn clip_to_viewport(
             y1 = y;
             code1 = out_code(x1, y1, width, height);
         }
+    }
+}
+
+fn clip_intersection(
+    code_out: u8,
+    x0: f32,
+    y0: f32,
+    x1: f32,
+    y1: f32,
+    width: i32,
+    height: i32,
+) -> ProjectedPoint {
+    if code_out & OUT_TOP != 0 {
+        (x0 + (x1 - x0) * (0.0 - y0) / (y1 - y0), 0.0)
+    } else if code_out & OUT_BOTTOM != 0 {
+        (
+            x0 + (x1 - x0) * ((height - 1) as f32 - y0) / (y1 - y0),
+            (height - 1) as f32,
+        )
+    } else if code_out & OUT_RIGHT != 0 {
+        (
+            (width - 1) as f32,
+            y0 + (y1 - y0) * ((width - 1) as f32 - x0) / (x1 - x0),
+        )
+    } else {
+        (0.0, y0 + (y1 - y0) * (0.0 - x0) / (x1 - x0))
     }
 }
 
@@ -618,7 +630,7 @@ fn glyph_rows(glyph: char) -> [u8; 7] {
 mod tests {
     use super::{
         Camera, Scene, ScreenDot, ScreenLine, ScreenText, WorldLine, clip_to_near_plane,
-        project_segment, raster_size, scale_to_fit,
+        clip_to_viewport, out_code, project_segment, raster_size, scale_to_fit,
     };
     use crate::math::Vec3;
     use crate::terminal::TerminalGeometry;
@@ -716,5 +728,62 @@ mod tests {
             centered: true,
         });
         assert_eq!(scene.overlay_text.len(), 1);
+    }
+
+    #[test]
+    fn clip_to_viewport_rejects_segments_outside_one_side() {
+        let clipped = clip_to_viewport((-10.0, 10.0), (-5.0, 40.0), 320, 180);
+        assert!(clipped.is_none());
+    }
+
+    #[test]
+    fn out_code_marks_each_viewport_edge() {
+        assert_eq!(out_code(-1.0, 10.0, 320, 180), super::OUT_LEFT);
+        assert_eq!(out_code(400.0, 10.0, 320, 180), super::OUT_RIGHT);
+        assert_eq!(out_code(10.0, -1.0, 320, 180), super::OUT_TOP);
+        assert_eq!(out_code(10.0, 200.0, 320, 180), super::OUT_BOTTOM);
+    }
+
+    #[test]
+    fn renderer_draws_overlay_text_and_geometry_pixels() {
+        let geometry = TerminalGeometry {
+            cols: 80,
+            rows: 24,
+            pixel_width: 800,
+            pixel_height: 480,
+        };
+        let renderer = super::Renderer::new(geometry);
+        let mut scene = Scene::empty(Camera {
+            position: Vec3::new(0.0, 0.0, 0.0),
+            heading: 0.0,
+        });
+        scene.world_lines.push(WorldLine {
+            start: Vec3::new(-1.0, 0.0, 8.0),
+            end: Vec3::new(1.0, 0.0, 8.0),
+            brightness: 1.0,
+            color: None,
+        });
+        scene.overlay_lines.push(ScreenLine {
+            start: (5, 5),
+            end: (25, 5),
+            color: [255, 255, 255, 255],
+            thickness: 1,
+        });
+        scene.overlay_dots.push(ScreenDot {
+            center: (30, 12),
+            color: [255, 255, 255, 255],
+            radius: 3,
+        });
+        scene.overlay_text.push(ScreenText {
+            position: (20, 20),
+            text: String::from("HI"),
+            color: [255, 255, 255, 255],
+            scale: 2,
+            centered: false,
+        });
+        scene.show_crosshair = true;
+
+        let image = renderer.render(&scene);
+        assert!(image.pixels.iter().any(|channel| *channel != 0));
     }
 }

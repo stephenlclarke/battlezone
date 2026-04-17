@@ -111,59 +111,12 @@ impl InputTracker {
         }
 
         match key_event.code {
-            KeyCode::Char(character) => {
-                let character = character.to_ascii_lowercase();
-                if pressed && character.is_ascii_alphabetic() {
-                    input.typed_chars.push(character);
-                }
-                match character {
-                    'q' => self.held.left_tread_forward = pressed,
-                    'a' => self.held.left_tread_backward = pressed,
-                    'p' => {
-                        self.held.right_tread_forward = pressed;
-                        if pressed {
-                            input.initials_previous = true;
-                        }
-                    }
-                    'l' => {
-                        self.held.right_tread_backward = pressed;
-                        if pressed {
-                            input.initials_next = true;
-                        }
-                    }
-                    'h' if pressed => input.autopilot_toggle_requested = true,
-                    ' ' => {
-                        self.held.fire = pressed;
-                        if pressed {
-                            input.fire = true;
-                            input.initials_confirm = true;
-                        }
-                    }
-                    '1' if pressed => {
-                        input.start_requested = true;
-                        input.initials_confirm = true;
-                    }
-                    _ => {}
-                }
-            }
+            KeyCode::Char(character) => self.handle_char_key(character, pressed, input),
             KeyCode::Up => self.held.forward = pressed,
             KeyCode::Down => self.held.backward = pressed,
-            KeyCode::Right => {
-                self.held.turn_right = pressed;
-                if pressed {
-                    input.initials_next = true;
-                }
-            }
-            KeyCode::Left => {
-                self.held.turn_left = pressed;
-                if pressed {
-                    input.initials_previous = true;
-                }
-            }
-            KeyCode::Enter if pressed => {
-                input.start_requested = true;
-                input.initials_confirm = true;
-            }
+            KeyCode::Right => self.handle_turn_key(true, pressed, input),
+            KeyCode::Left => self.handle_turn_key(false, pressed, input),
+            KeyCode::Enter if pressed => trigger_start(input),
             KeyCode::Esc if pressed => input.quit_requested = true,
             _ => {}
         }
@@ -175,52 +128,123 @@ impl InputTracker {
         }
 
         match key_event.code {
-            KeyCode::Char(character) => {
-                let character = character.to_ascii_lowercase();
-                if character.is_ascii_alphabetic() {
-                    input.typed_chars.push(character);
-                }
-                match character {
-                    'q' => input.left_tread_forward = true,
-                    'a' => input.left_tread_backward = true,
-                    'p' => {
-                        input.right_tread_forward = true;
-                        input.initials_previous = true;
-                    }
-                    'l' => {
-                        input.right_tread_backward = true;
-                        input.initials_next = true;
-                    }
-                    'h' => input.autopilot_toggle_requested = true,
-                    ' ' => {
-                        input.fire = true;
-                        input.initials_confirm = true;
-                    }
-                    '1' => {
-                        input.start_requested = true;
-                        input.initials_confirm = true;
-                    }
-                    _ => {}
-                }
-            }
+            KeyCode::Char(character) => handle_event_based_char_key(input, character),
             KeyCode::Up => input.forward = true,
             KeyCode::Down => input.backward = true,
-            KeyCode::Right => {
-                input.turn_right = true;
-                input.initials_next = true;
-            }
-            KeyCode::Left => {
-                input.turn_left = true;
-                input.initials_previous = true;
-            }
-            KeyCode::Enter => {
-                input.start_requested = true;
-                input.initials_confirm = true;
-            }
+            KeyCode::Right => set_turn_input(input, true),
+            KeyCode::Left => set_turn_input(input, false),
+            KeyCode::Enter => trigger_start(input),
             KeyCode::Esc => input.quit_requested = true,
             _ => {}
         }
     }
+
+    fn handle_char_key(&mut self, character: char, pressed: bool, input: &mut UpdateInput) {
+        let character = character.to_ascii_lowercase();
+        if pressed && character.is_ascii_alphabetic() {
+            input.typed_chars.push(character);
+        }
+
+        match character {
+            'q' => self.held.left_tread_forward = pressed,
+            'a' => self.held.left_tread_backward = pressed,
+            'p' => self.handle_tread_key(false, true, pressed, input),
+            'l' => self.handle_tread_key(false, false, pressed, input),
+            'h' if pressed => input.autopilot_toggle_requested = true,
+            ' ' => self.handle_fire_key(pressed, input),
+            '1' if pressed => trigger_start(input),
+            _ => {}
+        }
+    }
+
+    fn handle_tread_key(
+        &mut self,
+        left: bool,
+        forward: bool,
+        pressed: bool,
+        input: &mut UpdateInput,
+    ) {
+        match (left, forward) {
+            (true, true) => self.held.left_tread_forward = pressed,
+            (true, false) => self.held.left_tread_backward = pressed,
+            (false, true) => {
+                self.held.right_tread_forward = pressed;
+                if pressed {
+                    input.initials_previous = true;
+                }
+            }
+            (false, false) => {
+                self.held.right_tread_backward = pressed;
+                if pressed {
+                    input.initials_next = true;
+                }
+            }
+        }
+    }
+
+    fn handle_turn_key(&mut self, right: bool, pressed: bool, input: &mut UpdateInput) {
+        if right {
+            self.held.turn_right = pressed;
+            if pressed {
+                input.initials_next = true;
+            }
+        } else {
+            self.held.turn_left = pressed;
+            if pressed {
+                input.initials_previous = true;
+            }
+        }
+    }
+
+    fn handle_fire_key(&mut self, pressed: bool, input: &mut UpdateInput) {
+        self.held.fire = pressed;
+        if pressed {
+            input.fire = true;
+            input.initials_confirm = true;
+        }
+    }
+}
+
+fn handle_event_based_char_key(input: &mut UpdateInput, character: char) {
+    let character = character.to_ascii_lowercase();
+    if character.is_ascii_alphabetic() {
+        input.typed_chars.push(character);
+    }
+
+    match character {
+        'q' => input.left_tread_forward = true,
+        'a' => input.left_tread_backward = true,
+        'p' => {
+            input.right_tread_forward = true;
+            input.initials_previous = true;
+        }
+        'l' => {
+            input.right_tread_backward = true;
+            input.initials_next = true;
+        }
+        'h' => input.autopilot_toggle_requested = true,
+        ' ' => {
+            input.fire = true;
+            input.initials_confirm = true;
+        }
+        '1' => trigger_start(input),
+        _ => {}
+    }
+}
+
+fn set_turn_input(input: &mut UpdateInput, right: bool) {
+    if right {
+        input.turn_right = true;
+        input.initials_next = true;
+    } else {
+        input.turn_left = true;
+        input.initials_previous = true;
+    }
+}
+
+fn trigger_start(input: &mut UpdateInput) {
+    input.start_requested = true;
+    input.initials_confirm = true;
 }
 
 fn axis(forward: bool, backward: bool) -> i8 {
@@ -361,5 +385,63 @@ mod tests {
             &mut UpdateInput::default(),
         );
         assert!(!tracker.held.fire);
+    }
+
+    #[test]
+    fn releasing_a_track_key_clears_its_held_state() {
+        let mut tracker = InputTracker::new(true);
+        tracker.handle_key_event(
+            KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE),
+            &mut UpdateInput::default(),
+        );
+        assert!(tracker.held.right_tread_forward);
+
+        tracker.handle_key_event(
+            KeyEvent {
+                code: KeyCode::Char('p'),
+                modifiers: KeyModifiers::NONE,
+                kind: KeyEventKind::Release,
+                state: crossterm::event::KeyEventState::NONE,
+            },
+            &mut UpdateInput::default(),
+        );
+        assert!(!tracker.held.right_tread_forward);
+    }
+
+    #[test]
+    fn event_based_input_maps_start_and_turn_keys() {
+        let mut tracker = InputTracker::new(false);
+        let mut input = UpdateInput::default();
+
+        tracker.handle_event_based_key_event(
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+            &mut input,
+        );
+        tracker.handle_event_based_key_event(
+            KeyEvent::new(KeyCode::Left, KeyModifiers::NONE),
+            &mut input,
+        );
+
+        assert!(input.start_requested);
+        assert!(input.initials_confirm);
+        assert!(input.turn_left);
+        assert!(input.initials_previous);
+    }
+
+    #[test]
+    fn non_press_events_are_ignored_in_event_based_mode() {
+        let mut tracker = InputTracker::new(false);
+        let mut input = UpdateInput::default();
+        tracker.handle_event_based_key_event(
+            KeyEvent {
+                code: KeyCode::Char('q'),
+                modifiers: KeyModifiers::NONE,
+                kind: KeyEventKind::Release,
+                state: crossterm::event::KeyEventState::NONE,
+            },
+            &mut input,
+        );
+        assert_eq!(input.left_tread_axis(), 0);
+        assert!(input.typed_chars.is_empty());
     }
 }

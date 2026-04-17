@@ -123,3 +123,29 @@ fn pixel_size() -> (u16, u16) {
 fn pixel_size() -> (u16, u16) {
     (0, 0)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{TerminalGeometry, TerminalSession, pixel_size};
+
+    #[test]
+    fn keyboard_enhancement_flag_round_trips() {
+        let session = TerminalSession {
+            keyboard_enhancement_supported: true,
+        };
+        assert!(session.keyboard_enhancement_supported());
+
+        std::mem::forget(session);
+    }
+
+    #[test]
+    fn pixel_size_returns_a_pair() {
+        let (width, height) = pixel_size();
+        let _ = TerminalGeometry {
+            cols: 80,
+            rows: 24,
+            pixel_width: width,
+            pixel_height: height,
+        };
+    }
+}

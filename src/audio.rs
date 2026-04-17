@@ -112,3 +112,37 @@ impl Drop for AudioManager {
         self.stop_title_drone();
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{AudioManager, AudioOutput};
+    use crate::game::GameEvent;
+
+    #[test]
+    fn silent_audio_manager_handles_every_game_event() {
+        let mut audio = AudioManager {
+            output: None,
+            title_drone: None,
+        };
+
+        for event in [
+            GameEvent::TitleScreenEntered,
+            GameEvent::GameStarted,
+            GameEvent::PlayerShot,
+            GameEvent::EnemyShot,
+            GameEvent::EnemyDestroyed,
+            GameEvent::PlayerDestroyed,
+            GameEvent::SaucerDestroyed,
+            GameEvent::RadarPing,
+        ] {
+            audio.handle_event(event);
+        }
+
+        assert!(audio.title_drone.is_none());
+    }
+
+    #[test]
+    fn creating_audio_output_is_safe_even_without_a_device() {
+        let _ = AudioOutput::new();
+    }
+}
