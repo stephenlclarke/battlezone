@@ -11,6 +11,7 @@
 [![Technical Debt](https://sonarcloud.io/api/project_badges/measure?project=stephenlclarke_battlezone&metric=sqale_index)](https://sonarcloud.io/summary/new_code?id=stephenlclarke_battlezone)
 [![Maintainability Rating](https://sonarcloud.io/api/project_badges/measure?project=stephenlclarke_battlezone&metric=sqale_rating)](https://sonarcloud.io/summary/new_code?id=stephenlclarke_battlezone)
 [![Vulnerabilities](https://sonarcloud.io/api/project_badges/measure?project=stephenlclarke_battlezone&metric=vulnerabilities)](https://sonarcloud.io/summary/new_code?id=stephenlclarke_battlezone)
+![Repo Visitors](https://visitor-badge.laobi.icu/badge?page_id=stephenlclarke.battlezone)
 
 ---
 
@@ -41,6 +42,8 @@ Run targets:
 - `cargo test`
 - `cargo fmt --check`
 - `cargo clippy --all-targets -- -D warnings`
+- `make sq-ci`
+- `make sq`
 - `cargo run --example generate_readme_media`
 
 Run this inside `kitty`, `ghostty`, `warp` or another terminal that supports the
@@ -110,6 +113,15 @@ Extra keys while `xyzzy` mode is active:
   binaries are required.
 - If `battlezone` is not found after installation, ensure `~/.cargo/bin` is on
   your `PATH`.
+
+## SonarQube
+
+- `make sq-ci` generates the Cobertura coverage report used by the SonarCloud
+  workflow in CI.
+- `make sq` runs the same coverage step locally and then invokes
+  `sonar-scanner`.
+- Local SonarQube scans require `cargo-llvm-cov`, `sonar-scanner`, and a
+  `SONAR_TOKEN` environment variable.
 
 ## Source Materials
 
