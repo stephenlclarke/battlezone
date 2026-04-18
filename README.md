@@ -98,11 +98,11 @@ Letter-key controls accept either upper- or lower-case input.
 
 Extra keys while `xyzzy` mode is active:
 
+- `F`: increase the hidden fire-rate level with each press, up to a capped
+  maximum.
 - `G`: toggle god mode. While active, enemy units are drawn in red, enemy
   projectiles are orange, your projectiles are yellow, and enemy fire cannot
   kill the player tank.
-- `F`: increase the hidden fire-rate level with each press, up to a capped
-  maximum.
 - `H`: toggle hidden autopilot. While active, the tank will steer toward the
   current enemy, try to maintain a firing solution, and bias away from
   incoming shots and exposed positions.
