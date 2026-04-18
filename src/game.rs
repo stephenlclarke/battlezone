@@ -1587,6 +1587,7 @@ impl Game {
 
     fn handle_easter_egg_input(&mut self, typed_chars: &[char]) {
         for &character in typed_chars {
+            let character = character.to_ascii_lowercase();
             self.update_easter_egg_sequence(character);
             if !self.easter_egg.active {
                 continue;
@@ -3522,7 +3523,7 @@ mod tests {
         game.update_with_input(
             0.0,
             UpdateInput {
-                typed_chars: vec!['x', 'y', 'z', 'z', 'y'],
+                typed_chars: vec!['X', 'Y', 'Z', 'Z', 'Y'],
                 ..UpdateInput::default()
             },
         );
@@ -3534,7 +3535,7 @@ mod tests {
         game.update_with_input(
             0.0,
             UpdateInput {
-                typed_chars: vec!['g', 'f'],
+                typed_chars: vec!['G', 'F'],
                 autopilot_toggle_requested: true,
                 ..UpdateInput::default()
             },
@@ -3546,7 +3547,7 @@ mod tests {
         game.update_with_input(
             0.0,
             UpdateInput {
-                typed_chars: vec!['x', 'y', 'z', 'z', 'y'],
+                typed_chars: vec!['X', 'Y', 'Z', 'Z', 'Y'],
                 ..UpdateInput::default()
             },
         );
@@ -3558,7 +3559,7 @@ mod tests {
         game.update_with_input(
             0.0,
             UpdateInput {
-                typed_chars: vec!['x', 'y', 'z', 'z', 'y'],
+                typed_chars: vec!['X', 'Y', 'Z', 'Z', 'Y'],
                 ..UpdateInput::default()
             },
         );
@@ -3852,7 +3853,7 @@ mod tests {
         game.update_with_input(
             0.0,
             UpdateInput {
-                typed_chars: vec!['x', 'y', 'z', 'z', 'y'],
+                typed_chars: vec!['X', 'Y', 'Z', 'Z', 'Y'],
                 ..UpdateInput::default()
             },
         );

@@ -83,22 +83,24 @@ reliable combined-tread movement.
 
 ## XYZZY Mode
 
-After starting a game, type `x`, `y`, `z`, `z`, `y` to toggle hidden
-`xyzzy` mode on or off.
+After starting a game, type `X`, `Y`, `Z`, `Z`, `Y` to toggle hidden
+`XYZZY` mode on or off.
 
-Typing `xyzzy` a second time turns the mode off and resets every secret option
+Typing `XYZZY` a second time turns the mode off and resets every secret option
 back to its default state. If you activate `xyzzy` again later, it starts clean
 with all hidden options disabled and the fire-rate boost reset to its base
 level.
 
+Letter-key controls accept either upper- or lower-case input.
+
 Extra keys while `xyzzy` mode is active:
 
-- `g`: toggle god mode. While active, enemy units are drawn in red, enemy
+- `G`: toggle god mode. While active, enemy units are drawn in red, enemy
   projectiles are orange, your projectiles are yellow, and enemy fire cannot
   kill the player tank.
-- `f`: increase the hidden fire-rate level with each press, up to a capped
+- `F`: increase the hidden fire-rate level with each press, up to a capped
   maximum.
-- `h`: toggle hidden autopilot. While active, the tank will steer toward the
+- `H`: toggle hidden autopilot. While active, the tank will steer toward the
   current enemy, try to maintain a firing solution, and bias away from
   incoming shots and exposed positions.
 

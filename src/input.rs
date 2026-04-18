@@ -338,7 +338,7 @@ mod tests {
         let mut tracker = InputTracker::new(true);
         let mut input = UpdateInput::default();
         tracker.handle_key_event(
-            KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE),
+            KeyEvent::new(KeyCode::Char('Q'), KeyModifiers::SHIFT),
             &mut input,
         );
         assert!(!input.quit_requested);
@@ -354,7 +354,7 @@ mod tests {
         let mut tracker = InputTracker::new(true);
         let mut input = UpdateInput::default();
         tracker.handle_key_event(
-            KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE),
+            KeyEvent::new(KeyCode::Char('H'), KeyModifiers::SHIFT),
             &mut input,
         );
         assert!(input.autopilot_toggle_requested);
@@ -391,21 +391,36 @@ mod tests {
     fn releasing_a_track_key_clears_its_held_state() {
         let mut tracker = InputTracker::new(true);
         tracker.handle_key_event(
-            KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE),
+            KeyEvent::new(KeyCode::Char('P'), KeyModifiers::SHIFT),
             &mut UpdateInput::default(),
         );
         assert!(tracker.held.right_tread_forward);
 
         tracker.handle_key_event(
             KeyEvent {
-                code: KeyCode::Char('p'),
-                modifiers: KeyModifiers::NONE,
+                code: KeyCode::Char('P'),
+                modifiers: KeyModifiers::SHIFT,
                 kind: KeyEventKind::Release,
                 state: crossterm::event::KeyEventState::NONE,
             },
             &mut UpdateInput::default(),
         );
         assert!(!tracker.held.right_tread_forward);
+    }
+
+    #[test]
+    fn uppercase_secret_letters_are_stored_lowercased() {
+        let mut tracker = InputTracker::new(true);
+        let mut input = UpdateInput::default();
+
+        for character in ['X', 'Y', 'Z'] {
+            tracker.handle_key_event(
+                KeyEvent::new(KeyCode::Char(character), KeyModifiers::SHIFT),
+                &mut input,
+            );
+        }
+
+        assert_eq!(input.typed_chars, vec!['x', 'y', 'z']);
     }
 
     #[test]
