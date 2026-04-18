@@ -39,12 +39,15 @@ ROM files at runtime.
 Run targets:
 
 - `cargo run`
+- `make run`
 - `cargo test`
 - `cargo fmt --check`
 - `cargo clippy --all-targets -- -D warnings`
+- `make ci`
+- `make coverage`
 - `make sq-ci`
 - `make sq`
-- `cargo run --example generate_readme_media`
+- `make readme-media`
 
 Run this inside `kitty`, `ghostty`, `warp` or another terminal that supports the
 Kitty graphics protocol.
