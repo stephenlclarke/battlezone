@@ -6,6 +6,10 @@ use crate::{
     arcade::{self, ArcadeTables, ObstacleKind},
     attract::{self, TextSize},
     constants::{INFO_COLOR, SCREEN_COLOR, SCREEN_COLOR_DIM, WARNING_COLOR},
+    high_scores::{
+        HighScoreEntry, default_high_scores, insert_entry, load_default as load_high_scores,
+        qualifies as qualifies_high_score, save_default as save_high_scores,
+    },
     input::UpdateInput,
     math::{Vec3, forward, rotate_y},
     render::{BackgroundStyle, Camera, Scene, ScreenDot, ScreenLine, ScreenText, WorldLine},
@@ -494,12 +498,6 @@ enum ProjectileOwner {
     Enemy,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct HighScoreEntry {
-    pub initials: String,
-    pub score: u32,
-}
-
 #[derive(Clone, Copy, Debug)]
 struct Player {
     position: Vec3,
@@ -584,6 +582,7 @@ pub struct Game {
     next_bonus_tank_index: usize,
     missile_launch_counter: u8,
     high_scores: Vec<HighScoreEntry>,
+    persist_high_scores: bool,
     enemy: Option<Enemy>,
     player_projectiles: Vec<Projectile>,
     player_shot_cooldown: f32,
@@ -614,10 +613,22 @@ impl Default for Game {
 
 impl Game {
     pub fn new() -> Self {
-        Self::with_seed(fastrand::u64(..))
+        Self::with_seed_and_high_scores(fastrand::u64(..), default_high_scores(), false)
+    }
+
+    pub fn load() -> Self {
+        Self::with_seed_and_high_scores(fastrand::u64(..), load_high_scores(), true)
     }
 
     pub fn with_seed(seed: u64) -> Self {
+        Self::with_seed_and_high_scores(seed, default_high_scores(), false)
+    }
+
+    fn with_seed_and_high_scores(
+        seed: u64,
+        high_scores: Vec<HighScoreEntry>,
+        persist_high_scores: bool,
+    ) -> Self {
         let arcade = arcade::arcade_tables();
         let mut game = Self {
             arcade,
@@ -635,7 +646,8 @@ impl Game {
             lives: arcade.starting_lives,
             next_bonus_tank_index: 0,
             missile_launch_counter: u8::MAX,
-            high_scores: default_high_scores(),
+            high_scores,
+            persist_high_scores,
             enemy: None,
             player_projectiles: Vec::new(),
             player_shot_cooldown: 0.0,
@@ -1343,26 +1355,15 @@ impl Game {
             return;
         };
         let initials = String::from_utf8(entry.letters.to_vec()).expect("letters should be ASCII");
-        self.high_scores.push(HighScoreEntry {
-            initials,
-            score: entry.score,
-        });
-        self.high_scores.sort_by(|left, right| {
-            right
-                .score
-                .cmp(&left.score)
-                .then_with(|| left.initials.cmp(&right.initials))
-        });
-        self.high_scores.truncate(10);
+        insert_entry(&mut self.high_scores, &initials, entry.score);
+        if self.persist_high_scores {
+            let _ = save_high_scores(&self.high_scores);
+        }
         self.enter_title_mode();
     }
 
     fn qualifies_for_high_score(&self, score: u32) -> bool {
-        self.high_scores.len() < 10
-            || self
-                .high_scores
-                .last()
-                .is_some_and(|entry| score > entry.score)
+        qualifies_high_score(&self.high_scores, score)
     }
 
     fn spawn_enemy(&mut self, preferred: Option<EnemyKind>) {
@@ -2767,51 +2768,6 @@ fn slow_tank_tread_vertices(front_visible: bool, tread_phase: f32) -> &'static [
         (false, 2) => &REAR_TREAD_2_VERTICES,
         (false, _) => &REAR_TREAD_3_VERTICES,
     }
-}
-
-fn default_high_scores() -> Vec<HighScoreEntry> {
-    vec![
-        HighScoreEntry {
-            initials: String::from("ACE"),
-            score: 120_000,
-        },
-        HighScoreEntry {
-            initials: String::from("DVG"),
-            score: 105_000,
-        },
-        HighScoreEntry {
-            initials: String::from("AVG"),
-            score: 70_000,
-        },
-        HighScoreEntry {
-            initials: String::from("ROM"),
-            score: 60_000,
-        },
-        HighScoreEntry {
-            initials: String::from("CPU"),
-            score: 50_000,
-        },
-        HighScoreEntry {
-            initials: String::from("TNK"),
-            score: 40_000,
-        },
-        HighScoreEntry {
-            initials: String::from("RAD"),
-            score: 30_000,
-        },
-        HighScoreEntry {
-            initials: String::from("GUN"),
-            score: 20_000,
-        },
-        HighScoreEntry {
-            initials: String::from("VEC"),
-            score: 10_000,
-        },
-        HighScoreEntry {
-            initials: String::from("COM"),
-            score: 5_000,
-        },
-    ]
 }
 
 fn rotate_letter(letter: &mut u8, delta: i32) {

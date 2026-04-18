@@ -34,7 +34,7 @@ pub fn run() -> Result<()> {
     let mut terminal_geometry = geometry()?;
     let mut renderer = Renderer::new(terminal_geometry);
     let mut graphics = KittyGraphics::new(terminal_geometry.cols, terminal_geometry.rows);
-    let mut game = Game::new();
+    let mut game = Game::load();
     let mut audio = AudioManager::new();
     let mut input_tracker = InputTracker::new(session.keyboard_enhancement_supported());
     game.set_viewport(renderer.image_width(), renderer.image_height());

@@ -6,6 +6,7 @@ pub mod attract;
 pub mod audio;
 pub mod constants;
 pub mod game;
+pub mod high_scores;
 pub mod input;
 pub mod kitty;
 pub mod math;
