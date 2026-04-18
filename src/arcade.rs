@@ -2,6 +2,8 @@
 
 use std::sync::OnceLock;
 
+use crate::customization;
+
 pub const ORIGINAL_FPS: f32 = 41.666_668;
 pub const ORIGINAL_FRAME_TIME: f32 = 1.0 / ORIGINAL_FPS;
 
@@ -40,7 +42,11 @@ pub struct ArcadeTables {
 
 pub fn arcade_tables() -> &'static ArcadeTables {
     static TABLES: OnceLock<ArcadeTables> = OnceLock::new();
-    TABLES.get_or_init(|| parse_arcade_tables(ARCADE_RULES, BATTLEFIELD_LAYOUT))
+    TABLES.get_or_init(|| {
+        let rules = customization::load_arcade_text("arcade-rules.txt", ARCADE_RULES);
+        let battlefield = customization::load_arcade_text("battlefield.txt", BATTLEFIELD_LAYOUT);
+        parse_arcade_tables(&rules, &battlefield)
+    })
 }
 
 pub fn bonus_tank_label() -> String {

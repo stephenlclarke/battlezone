@@ -157,6 +157,66 @@ the final runtime self-contained:
   extraction and reference work. The shipped game does not bundle or load ROM
   files at runtime.
 
+## Customisation
+
+Arcade defaults ship in `assets/arcade/`. Copy the files you want to change
+into `~/.xyzzy/battlezone/` to override them locally. Key/value files are
+merged on top of the embedded defaults, so you only need to include the keys
+you want to change. Layout files are replaced whole. If `BATTLEZONE_DATA_DIR`
+is set, the game reads these files from that directory instead.
+
+### `arcade-rules.txt`
+
+`starting_lives`
+Default: `3`
+Meaning: number of tanks granted at the start of a credit.
+
+`missile_score_threshold`
+Default: `10000`
+Meaning: score where guided missiles start appearing.
+
+`missile_nastier_delta`
+Default: `25000`
+Meaning: additional score needed before missiles switch to the nastier
+threshold.
+
+`bonus_tank_thresholds`
+Default: `15000,100000`
+Meaning: score thresholds for the first and second bonus tanks.
+
+`saucer_score_threshold`
+Default: `2000`
+Meaning: score where saucers begin to join the battle.
+
+`near_spawn_distance`
+Default: `47.996094`
+Meaning: minimum spawn radius used for newly created enemies.
+
+`far_spawn_distance`
+Default: `95.996094`
+Meaning: far spawn radius used for distant enemy placement.
+
+`strings`
+Default:
+
+```text
+PRESS START|HIGH SCORES|GREAT SCORE|ENTER YOUR INITIALS|
+CHANGE LETTER WITH RIGHT HAND CONTROLLER|SELECT LETTER WITH FIRE BUTTON|
+ENEMY IN RANGE|ENEMY TO LEFT|ENEMY TO RIGHT|ENEMY TO REAR|
+MOTION BLOCKED BY OBJECT
+```
+
+Meaning: title, HUD, and initials-entry strings extracted from the arcade
+data.
+
+### `battlefield.txt`
+
+This file is a whole-layout override rather than a partial key/value merge. If
+`~/.xyzzy/battlezone/battlefield.txt` exists, it fully replaces the embedded
+21-row obstacle layout. Each default row in `assets/arcade/battlefield.txt`
+uses `kind x z heading_deg radius` to define one obstacle’s type, position,
+rotation, and collision radius.
+
 ## Platform Support
 
 The game is intended for Unix-like environments with a terminal that speaks the
