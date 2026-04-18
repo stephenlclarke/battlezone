@@ -85,11 +85,14 @@ pub fn default_storage_path() -> PathBuf {
 
     if let Some(home) = env::var_os("HOME") {
         return PathBuf::from(home)
-            .join(".battlezone")
+            .join(".xyzzy")
+            .join("battlezone")
             .join("high_scores.txt");
     }
 
-    PathBuf::from(".battlezone-high-scores.txt")
+    PathBuf::from(".xyzzy")
+        .join("battlezone")
+        .join("high_scores.txt")
 }
 
 pub fn sanitize_initials(initials: &str) -> String {
@@ -287,7 +290,7 @@ mod tests {
         let path = default_storage_path();
         assert_eq!(
             path,
-            PathBuf::from("/tmp/battlezone-home/.battlezone/high_scores.txt")
+            PathBuf::from("/tmp/battlezone-home/.xyzzy/battlezone/high_scores.txt")
         );
 
         // SAFETY: This test restores process environment variables modified above.

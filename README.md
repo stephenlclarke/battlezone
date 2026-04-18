@@ -116,8 +116,9 @@ Extra keys while `xyzzy` mode is active:
   modules/assets.
 - Audio is synthesized in-process with `rodio`, so no platform-specific helper
   binaries are required.
-- High scores now persist between runs in `~/.battlezone/high_scores.txt`; set
-  `BATTLEZONE_DATA_DIR` to redirect that file for local experiments or tests.
+- High scores now persist between runs in
+  `~/.xyzzy/battlezone/high_scores.txt`; set `BATTLEZONE_DATA_DIR` to redirect
+  that file for local experiments or tests.
 - If `battlezone` is not found after installation, ensure `~/.cargo/bin` is on
   your `PATH`.
 
