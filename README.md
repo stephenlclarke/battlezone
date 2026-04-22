@@ -65,6 +65,14 @@ After installation, run the game with:
 
 - `battlezone`
 
+Version tags such as `v1.0.0` also publish prebuilt GitHub Release binaries for:
+
+- Linux `x86_64`
+- Linux `arm64`
+- Windows `x86_64`
+- macOS `arm64`
+- A `battlezone-<tag>-SHA256SUMS.txt` manifest for the released assets
+
 ## Controls
 
 Arcade play controls:
