@@ -287,6 +287,26 @@ mod tests {
             Some(InputKey::Up)
         );
         assert_eq!(
+            input_key_for_winit_key(Key::Named(NamedKey::ArrowDown)),
+            Some(InputKey::Down)
+        );
+        assert_eq!(
+            input_key_for_winit_key(Key::Named(NamedKey::ArrowLeft)),
+            Some(InputKey::Left)
+        );
+        assert_eq!(
+            input_key_for_winit_key(Key::Named(NamedKey::ArrowRight)),
+            Some(InputKey::Right)
+        );
+        assert_eq!(
+            input_key_for_winit_key(Key::Named(NamedKey::Enter)),
+            Some(InputKey::Enter)
+        );
+        assert_eq!(
+            input_key_for_winit_key(Key::Named(NamedKey::Escape)),
+            Some(InputKey::Escape)
+        );
+        assert_eq!(
             input_key_for_winit_key(Key::Named(NamedKey::Space)),
             Some(InputKey::Character(' '))
         );
@@ -294,5 +314,6 @@ mod tests {
             input_key_for_winit_key(Key::Character("q")),
             Some(InputKey::Character('q'))
         );
+        assert_eq!(input_key_for_winit_key(Key::Named(NamedKey::Tab)), None);
     }
 }
