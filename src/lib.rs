@@ -13,3 +13,4 @@ pub mod input;
 pub mod math;
 pub mod render;
 pub mod runtime;
+mod vector_mesh;

@@ -41,6 +41,14 @@ impl AudioManager {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn silent() -> Self {
+        Self {
+            output: None,
+            title_drone: None,
+        }
+    }
+
     pub fn handle_event(&mut self, event: GameEvent) {
         match event {
             GameEvent::TitleScreenEntered => self.start_title_drone(),

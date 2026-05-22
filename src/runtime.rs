@@ -51,13 +51,30 @@ enum RuntimeCommand {
     Shutdown,
 }
 
-struct RuntimeWorker {
+struct RuntimeWorker<S = EventLoopProxy<RuntimeEvent>> {
     command_rx: Receiver<RuntimeCommand>,
     scenes: SceneMailbox,
-    event_proxy: EventLoopProxy<RuntimeEvent>,
+    event_sink: S,
     game: Game,
     audio: AudioManager,
     input_tracker: InputTracker,
+}
+
+trait RuntimeEventSink {
+    fn send_runtime_event(&self, event: RuntimeEvent);
+}
+
+impl RuntimeEventSink for EventLoopProxy<RuntimeEvent> {
+    fn send_runtime_event(&self, event: RuntimeEvent) {
+        let _ = self.send_event(event);
+    }
+}
+
+#[cfg(test)]
+impl RuntimeEventSink for Sender<RuntimeEvent> {
+    fn send_runtime_event(&self, event: RuntimeEvent) {
+        let _ = self.send(event);
+    }
 }
 
 impl GameRuntime {
@@ -143,11 +160,14 @@ impl DoubleBuffer {
     }
 }
 
-impl RuntimeWorker {
+impl<S> RuntimeWorker<S>
+where
+    S: RuntimeEventSink,
+{
     fn new(
         command_rx: Receiver<RuntimeCommand>,
         scenes: SceneMailbox,
-        event_proxy: EventLoopProxy<RuntimeEvent>,
+        event_sink: S,
         size: ViewportSize,
         mut game: Game,
     ) -> Self {
@@ -156,7 +176,7 @@ impl RuntimeWorker {
         Self {
             command_rx,
             scenes,
-            event_proxy,
+            event_sink,
             game,
             audio: AudioManager::new(),
             input_tracker: InputTracker::new(),
@@ -178,7 +198,8 @@ impl RuntimeWorker {
                 break;
             };
             if input.quit_requested {
-                let _ = self.event_proxy.send_event(RuntimeEvent::QuitRequested);
+                self.event_sink
+                    .send_runtime_event(RuntimeEvent::QuitRequested);
                 break;
             }
 
@@ -223,7 +244,7 @@ impl RuntimeWorker {
 
     fn publish_frame(&mut self) {
         self.scenes.publish(self.game.frame());
-        let _ = self.event_proxy.send_event(RuntimeEvent::FrameReady);
+        self.event_sink.send_runtime_event(RuntimeEvent::FrameReady);
     }
 }
 
@@ -282,11 +303,22 @@ fn repeated_input(input: UpdateInput) -> UpdateInput {
 
 #[cfg(test)]
 mod tests {
-    use super::{SceneMailbox, consume_fixed_steps, repeated_input};
+    use std::{
+        sync::mpsc::{self, Receiver, Sender},
+        time::{Duration, Instant},
+    };
+
+    use super::{
+        RuntimeCommand, RuntimeEvent, RuntimeWorker, SceneMailbox, consume_fixed_steps,
+        repeated_input, run_fixed_updates, sleep_until_next_frame,
+    };
     use crate::{
-        input::UpdateInput,
+        arcade::ORIGINAL_FRAME_TIME,
+        audio::AudioManager,
+        game::Game,
+        input::{InputEvent, InputKey, UpdateInput},
         math::Vec3,
-        render::{Camera, Scene},
+        render::{Camera, Scene, ViewportSize},
     };
 
     #[test]
@@ -354,10 +386,130 @@ mod tests {
         assert!(scenes.take().is_none());
     }
 
+    #[test]
+    fn worker_collects_input_resize_clear_and_shutdown_commands() {
+        let (mut worker, command_tx, _event_rx, _scenes) = test_worker(ViewportSize::new(640, 360));
+
+        command_tx
+            .send(RuntimeCommand::Input(InputEvent::pressed(InputKey::Up)))
+            .expect("send input");
+        let input = worker.collect_frame_input().expect("input should collect");
+        assert!(input.forward);
+
+        command_tx
+            .send(RuntimeCommand::Resize(ViewportSize::new(800, 600)))
+            .expect("send resize");
+        command_tx
+            .send(RuntimeCommand::ClearInput)
+            .expect("send clear input");
+        let input = worker.collect_frame_input().expect("input should collect");
+        assert!(!input.forward);
+
+        command_tx
+            .send(RuntimeCommand::Shutdown)
+            .expect("send shutdown");
+        assert!(worker.collect_frame_input().is_none());
+    }
+
+    #[test]
+    fn worker_publishes_frames_to_mailbox_and_event_sink() {
+        let (mut worker, _command_tx, event_rx, scenes) = test_worker(ViewportSize::new(640, 360));
+
+        worker.publish_frame();
+
+        assert_eq!(event_rx.recv().ok(), Some(RuntimeEvent::FrameReady));
+        assert!(scenes.take().is_some());
+    }
+
+    #[test]
+    fn worker_run_publishes_initial_frame_and_stops_on_shutdown() {
+        let (worker, command_tx, event_rx, scenes) = test_worker(ViewportSize::new(640, 360));
+        command_tx
+            .send(RuntimeCommand::Shutdown)
+            .expect("send shutdown");
+
+        worker.run();
+
+        assert_eq!(
+            event_rx.try_iter().collect::<Vec<_>>(),
+            vec![RuntimeEvent::FrameReady]
+        );
+        assert!(scenes.take().is_some());
+    }
+
+    #[test]
+    fn worker_run_forwards_quit_requests() {
+        let (worker, command_tx, event_rx, _scenes) = test_worker(ViewportSize::new(640, 360));
+        command_tx
+            .send(RuntimeCommand::Input(InputEvent::pressed(InputKey::Escape)))
+            .expect("send quit input");
+
+        worker.run();
+
+        assert_eq!(
+            event_rx.try_iter().collect::<Vec<_>>(),
+            vec![RuntimeEvent::FrameReady, RuntimeEvent::QuitRequested]
+        );
+    }
+
+    #[test]
+    fn fixed_updates_advance_game_and_drop_repeated_one_shots() {
+        let mut game = Game::with_seed(23);
+        let mut audio = AudioManager::silent();
+
+        run_fixed_updates(
+            &mut game,
+            &mut audio,
+            ORIGINAL_FRAME_TIME,
+            2,
+            UpdateInput {
+                start_requested: true,
+                fire: true,
+                ..UpdateInput::default()
+            },
+        );
+
+        assert!(
+            game.frame()
+                .overlay_text
+                .iter()
+                .any(|text| text.text.contains("SCORE"))
+        );
+    }
+
+    #[test]
+    fn sleeping_until_next_frame_skips_elapsed_frames() {
+        sleep_until_next_frame(
+            Instant::now() - Duration::from_millis(5),
+            Duration::from_millis(1),
+        );
+    }
+
     fn test_scene(heading: f32) -> Scene {
         Scene::empty(Camera {
             position: Vec3::new(0.0, 0.0, 0.0),
             heading,
         })
+    }
+
+    fn test_worker(
+        size: ViewportSize,
+    ) -> (
+        RuntimeWorker<Sender<RuntimeEvent>>,
+        Sender<RuntimeCommand>,
+        Receiver<RuntimeEvent>,
+        SceneMailbox,
+    ) {
+        let (command_tx, command_rx) = mpsc::channel();
+        let (event_tx, event_rx) = mpsc::channel();
+        let scenes = SceneMailbox::default();
+        let worker = RuntimeWorker::new(
+            command_rx,
+            scenes.clone(),
+            event_tx,
+            size,
+            Game::with_seed(99),
+        );
+        (worker, command_tx, event_rx, scenes)
     }
 }
