@@ -10,8 +10,7 @@ use battlezone::{
     arcade::ORIGINAL_FRAME_TIME,
     game::Game,
     input::UpdateInput,
-    render::{RenderedImage, Renderer},
-    terminal::TerminalGeometry,
+    render::{RenderedImage, Renderer, ViewportSize},
 };
 use gif::{Encoder, Frame, Repeat};
 use png::{BitDepth, ColorType, Compression, Encoder as PngEncoder};
@@ -57,19 +56,9 @@ fn main() -> Result<()> {
     ensure_parent_dir(&screenshot_path)?;
     ensure_parent_dir(&gif_path)?;
 
-    let screenshot_geometry = TerminalGeometry {
-        cols: 72,
-        rows: 30,
-        pixel_width: 640,
-        pixel_height: 480,
-    };
-    let gif_geometry = TerminalGeometry {
-        cols: 72,
-        rows: 30,
-        pixel_width: 640,
-        pixel_height: 480,
-    };
-    let mut screenshot_renderer = Renderer::new(screenshot_geometry);
+    let screenshot_size = ViewportSize::new(640, 480);
+    let gif_size = ViewportSize::new(640, 480);
+    let mut screenshot_renderer = Renderer::new(screenshot_size);
     let mut game = Game::with_seed(0xBADD1E);
     game.set_viewport(
         screenshot_renderer.image_width(),
@@ -80,7 +69,7 @@ fn main() -> Result<()> {
     let screenshot = compose_windowed_screenshot(&screenshot);
     write_png(&screenshot_path, &screenshot)?;
 
-    let mut gif_renderer = Renderer::new(gif_geometry);
+    let mut gif_renderer = Renderer::new(gif_size);
     let mut game = Game::with_seed(0xBADD1E);
     game.set_viewport(gif_renderer.image_width(), gif_renderer.image_height());
     write_showcase_gif(&gif_path, &mut game, &mut gif_renderer)?;

@@ -1,19 +1,25 @@
-//! Projects Battlezone world geometry into a Kitty graphics frame and draws overlay text.
+//! Projects Battlezone world geometry into a software frame and draws overlay text.
 
 use crate::math::{Vec3, rotate_y};
-use crate::terminal::TerminalGeometry;
 
 const NEAR_PLANE: f32 = 0.2;
-const SKY_TOP: Color = Color(6, 10, 8, 255);
-const SKY_BOTTOM: Color = Color(12, 32, 18, 255);
-const GROUND_NEAR: Color = Color(14, 42, 14, 255);
-const GROUND_FAR: Color = Color(4, 12, 4, 255);
-const HORIZON_COLOR: Color = Color(50, 120, 50, 255);
-const CROSSHAIR_COLOR: Color = Color(180, 255, 180, 255);
+pub(crate) const SKY_TOP_RGBA: [u8; 4] = [6, 10, 8, 255];
+pub(crate) const SKY_BOTTOM_RGBA: [u8; 4] = [12, 32, 18, 255];
+pub(crate) const GROUND_NEAR_RGBA: [u8; 4] = [14, 42, 14, 255];
+pub(crate) const GROUND_FAR_RGBA: [u8; 4] = [4, 12, 4, 255];
+pub(crate) const HORIZON_RGBA: [u8; 4] = [50, 120, 50, 255];
+pub(crate) const CROSSHAIR_RGBA: [u8; 4] = [180, 255, 180, 255];
 
-type ProjectedPoint = (f32, f32);
-type ScreenPoint = (i32, i32);
-type ProjectedSegment = (ScreenPoint, ScreenPoint, f32);
+const SKY_TOP: Color = Color::from_rgba(SKY_TOP_RGBA);
+const SKY_BOTTOM: Color = Color::from_rgba(SKY_BOTTOM_RGBA);
+const GROUND_NEAR: Color = Color::from_rgba(GROUND_NEAR_RGBA);
+const GROUND_FAR: Color = Color::from_rgba(GROUND_FAR_RGBA);
+const HORIZON_COLOR: Color = Color::from_rgba(HORIZON_RGBA);
+const CROSSHAIR_COLOR: Color = Color::from_rgba(CROSSHAIR_RGBA);
+
+pub(crate) type ProjectedPoint = (f32, f32);
+pub(crate) type ScreenPoint = (i32, i32);
+pub(crate) type ProjectedSegment = (ScreenPoint, ScreenPoint, f32);
 
 const OUT_LEFT: u8 = 0b0001;
 const OUT_RIGHT: u8 = 0b0010;
@@ -75,6 +81,13 @@ pub enum BackgroundStyle {
     Solid([u8; 4]),
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ViewportSize {
+    pub width: u32,
+    pub height: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RenderedImage {
     pub width: u32,
     pub height: u32,
@@ -110,9 +123,18 @@ impl Scene {
     }
 }
 
+impl ViewportSize {
+    pub fn new(width: u32, height: u32) -> Self {
+        Self {
+            width: width.max(1),
+            height: height.max(1),
+        }
+    }
+}
+
 impl Renderer {
-    pub fn new(geometry: TerminalGeometry) -> Self {
-        let (image_width, image_height) = raster_size(geometry);
+    pub fn new(size: ViewportSize) -> Self {
+        let (image_width, image_height) = raster_size(size);
         Self {
             image_width,
             image_height,
@@ -120,8 +142,8 @@ impl Renderer {
         }
     }
 
-    pub fn resize(&mut self, geometry: TerminalGeometry) {
-        *self = Self::new(geometry);
+    pub fn resize(&mut self, size: ViewportSize) {
+        *self = Self::new(size);
     }
 
     pub fn image_width(&self) -> u32 {
@@ -357,24 +379,17 @@ impl PixelBuffer {
 }
 
 impl Color {
-    fn from_rgba([r, g, b, a]: [u8; 4]) -> Self {
+    const fn from_rgba([r, g, b, a]: [u8; 4]) -> Self {
         Self(r, g, b, a)
+    }
+
+    const fn to_rgba(self) -> [u8; 4] {
+        [self.0, self.1, self.2, self.3]
     }
 }
 
-fn raster_size(geometry: TerminalGeometry) -> (u32, u32) {
-    let source_width = if geometry.pixel_width > 0 {
-        geometry.pixel_width as u32
-    } else {
-        u32::from(geometry.cols.max(40)) * 16
-    };
-    let source_height = if geometry.pixel_height > 0 {
-        geometry.pixel_height as u32
-    } else {
-        u32::from(geometry.rows.max(18)) * 32
-    };
-
-    scale_to_fit(source_width, source_height, 960, 720)
+fn raster_size(size: ViewportSize) -> (u32, u32) {
+    scale_to_fit(size.width, size.height, 960, 720)
 }
 
 fn scale_to_fit(width: u32, height: u32, max_width: u32, max_height: u32) -> (u32, u32) {
@@ -424,7 +439,15 @@ fn world_color(depth: f32, brightness: f32, override_color: Option<[u8; 4]>) -> 
     )
 }
 
-fn depth_thickness(depth: f32) -> i32 {
+pub(crate) fn world_color_rgba(
+    depth: f32,
+    brightness: f32,
+    override_color: Option<[u8; 4]>,
+) -> [u8; 4] {
+    world_color(depth, brightness, override_color).to_rgba()
+}
+
+pub(crate) fn depth_thickness(depth: f32) -> i32 {
     if depth < 10.0 {
         3
     } else if depth < 24.0 {
@@ -465,7 +488,7 @@ fn project_point(point: Vec3, width: u32, height: u32, focal: f32) -> Option<Pro
     Some((x, y))
 }
 
-fn project_segment(
+pub(crate) fn project_segment(
     camera: Camera,
     start: Vec3,
     end: Vec3,
@@ -566,15 +589,15 @@ fn out_code(x: f32, y: f32, width: i32, height: i32) -> u8 {
     code
 }
 
-fn glyph_advance(scale: i32) -> i32 {
+pub(crate) fn glyph_advance(scale: i32) -> i32 {
     6 * scale
 }
 
-fn text_width(text: &str, scale: i32) -> i32 {
+pub(crate) fn text_width(text: &str, scale: i32) -> i32 {
     (text.chars().count() as i32 * glyph_advance(scale)).saturating_sub(scale)
 }
 
-fn glyph_rows(glyph: char) -> [u8; 7] {
+pub(crate) fn glyph_rows(glyph: char) -> [u8; 7] {
     match glyph.to_ascii_uppercase() {
         'A' => [0x0e, 0x11, 0x11, 0x1f, 0x11, 0x11, 0x11],
         'B' => [0x1e, 0x11, 0x11, 0x1e, 0x11, 0x11, 0x1e],
@@ -629,11 +652,10 @@ fn glyph_rows(glyph: char) -> [u8; 7] {
 #[cfg(test)]
 mod tests {
     use super::{
-        Camera, Scene, ScreenDot, ScreenLine, ScreenText, WorldLine, clip_to_near_plane,
-        clip_to_viewport, out_code, project_segment, raster_size, scale_to_fit,
+        Camera, Scene, ScreenDot, ScreenLine, ScreenText, ViewportSize, WorldLine,
+        clip_to_near_plane, clip_to_viewport, out_code, project_segment, raster_size, scale_to_fit,
     };
     use crate::math::Vec3;
-    use crate::terminal::TerminalGeometry;
 
     #[test]
     fn scale_to_fit_preserves_bounds() {
@@ -687,14 +709,20 @@ mod tests {
     }
 
     #[test]
-    fn raster_size_uses_terminal_pixels_when_available() {
-        let geometry = TerminalGeometry {
-            cols: 100,
-            rows: 40,
-            pixel_width: 1200,
-            pixel_height: 800,
-        };
-        assert_eq!(raster_size(geometry), (960, 640));
+    fn raster_size_uses_viewport_pixels() {
+        let size = ViewportSize::new(1200, 800);
+        assert_eq!(raster_size(size), (960, 640));
+    }
+
+    #[test]
+    fn viewport_size_clamps_zero_dimensions() {
+        assert_eq!(
+            ViewportSize::new(0, 0),
+            ViewportSize {
+                width: 1,
+                height: 1
+            }
+        );
     }
 
     #[test]
@@ -746,13 +774,7 @@ mod tests {
 
     #[test]
     fn renderer_draws_overlay_text_and_geometry_pixels() {
-        let geometry = TerminalGeometry {
-            cols: 80,
-            rows: 24,
-            pixel_width: 800,
-            pixel_height: 480,
-        };
-        let renderer = super::Renderer::new(geometry);
+        let renderer = super::Renderer::new(ViewportSize::new(800, 480));
         let mut scene = Scene::empty(Camera {
             position: Vec3::new(0.0, 0.0, 0.0),
             heading: 0.0,

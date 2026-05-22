@@ -16,7 +16,7 @@
 ---
 
 This is a self-contained Rust implementation of Atari's original Battlezone,
-rendered through the Kitty graphics protocol.
+rendered as vector primitives in a native GPU window with `wgpu`.
 
 The current game uses a native Rust state machine for twin-stick tread
 movement, title and high-score screens, battlefield layout, radar, enemy
@@ -49,8 +49,9 @@ Run targets:
 - `make sq`
 - `make readme-media`
 
-Run this inside `kitty`, `ghostty`, `warp` or another terminal that supports the
-Kitty graphics protocol.
+Run the game from a desktop session with GPU support. The app opens its own
+window and presents line, dot, text, and background primitives through `wgpu`
+using vsync-backed double buffering.
 
 ## Install
 
@@ -87,10 +88,8 @@ Arcade play controls:
 - `Space`: fire
 - `Esc`: quit
 
-On terminals with key press/release reporting, holding `Q` + `P` together drives
-both treads forward like `Up`, and holding `A` + `L` together drives both
-treads backward like `Down`. On simpler terminals, use the arrow keys for
-reliable combined-tread movement.
+Holding `Q` + `P` together drives both treads forward like `Up`, and holding
+`A` + `L` together drives both treads backward like `Down`.
 
 ## XYZZY Mode
 
@@ -227,13 +226,12 @@ rotation, and collision radius.
 
 ## Platform Support
 
-The game is intended for Unix-like environments with a terminal that speaks the
-Kitty graphics protocol.
+The game is intended for desktop environments supported by `winit` and `wgpu`.
 
 macOS is the primary target because it has been the main development platform.
-Linux should also work, but the audio and terminal stack still need broader
+Linux should also work, but the audio and GPU/window stack still need broader
 real-world validation.
 
 For automated docs media generation or headless regression work, use the
-examples under `examples/` rather than trying to capture an interactive terminal
+examples under `examples/` rather than trying to capture an interactive window
 session directly.
