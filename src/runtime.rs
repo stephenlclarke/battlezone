@@ -65,9 +65,12 @@ impl GameRuntime {
         let (command_tx, command_rx) = mpsc::channel();
         let scenes = SceneMailbox::default();
         let worker_scenes = scenes.clone();
+        let game = Game::load().context("loading Battlezone game state")?;
         let handle = thread::Builder::new()
             .name(String::from("battlezone-game"))
-            .spawn(move || RuntimeWorker::new(command_rx, worker_scenes, event_proxy, size).run())
+            .spawn(move || {
+                RuntimeWorker::new(command_rx, worker_scenes, event_proxy, size, game).run()
+            })
             .context("spawning Battlezone game thread")?;
 
         Ok(Self {
@@ -146,8 +149,8 @@ impl RuntimeWorker {
         scenes: SceneMailbox,
         event_proxy: EventLoopProxy<RuntimeEvent>,
         size: ViewportSize,
+        mut game: Game,
     ) -> Self {
-        let mut game = Game::load();
         game.set_viewport(size.width, size.height);
 
         Self {
@@ -193,9 +196,6 @@ impl RuntimeWorker {
                     fixed_steps,
                     input.clone(),
                 );
-            } else {
-                self.game.update_with_input(dt, input);
-                drain_audio_events(&mut self.game, &mut self.audio);
             }
 
             self.publish_frame();

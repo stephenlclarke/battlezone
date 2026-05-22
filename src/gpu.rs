@@ -34,6 +34,8 @@ struct Vertex {
 }
 
 pub struct GpuPresenter {
+    instance: wgpu::Instance,
+    window: Arc<Window>,
     surface: wgpu::Surface<'static>,
     device: wgpu::Device,
     queue: wgpu::Queue,
@@ -68,7 +70,7 @@ impl GpuPresenter {
         let size = window.inner_size();
         let instance = wgpu::Instance::default();
         let surface = instance
-            .create_surface(window)
+            .create_surface(window.clone())
             .context("creating wgpu window surface")?;
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
@@ -94,6 +96,8 @@ impl GpuPresenter {
         let vertex_buffer = create_vertex_buffer(&device, INITIAL_VERTEX_CAPACITY);
 
         Ok(Self {
+            instance,
+            window,
             surface,
             device,
             queue,
@@ -135,8 +139,12 @@ impl GpuPresenter {
             wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => {
                 return Ok(());
             }
-            wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
+            wgpu::CurrentSurfaceTexture::Outdated => {
                 self.surface.configure(&self.device, &self.config);
+                return Ok(());
+            }
+            wgpu::CurrentSurfaceTexture::Lost => {
+                self.recreate_surface()?;
                 return Ok(());
             }
             wgpu::CurrentSurfaceTexture::Validation => {
@@ -178,6 +186,15 @@ impl GpuPresenter {
 
         self.queue.submit([encoder.finish()]);
         output.present();
+        Ok(())
+    }
+
+    fn recreate_surface(&mut self) -> Result<()> {
+        self.surface = self
+            .instance
+            .create_surface(self.window.clone())
+            .context("recreating lost wgpu window surface")?;
+        self.surface.configure(&self.device, &self.config);
         Ok(())
     }
 
@@ -310,12 +327,13 @@ impl VectorMesh {
         let dy = end.1 - start.1;
         let length = (dx * dx + dy * dy).sqrt();
         if length <= f32::EPSILON {
+            let size = thickness.max(1) as f32;
             self.add_rect(
                 PixelRect {
-                    x: start.0,
-                    y: start.1,
-                    width: thickness.max(1) as f32,
-                    height: thickness.max(1) as f32,
+                    x: start.0 - size * 0.5,
+                    y: start.1 - size * 0.5,
+                    width: size,
+                    height: size,
                 },
                 color,
                 viewport,
@@ -326,7 +344,7 @@ impl VectorMesh {
         let radius = thickness.max(1) as f32 * 0.5;
         let nx = -dy / length * radius;
         let ny = dx / length * radius;
-        let color = color_to_float(color);
+        let color = bright_srgb_color_to_surface_linear(color);
         self.add_triangle(
             vertex(start.0 + nx, start.1 + ny, color, viewport),
             vertex(start.0 - nx, start.1 - ny, color, viewport),
@@ -370,7 +388,7 @@ impl VectorMesh {
         color: [u8; 4],
         viewport: ViewportSize,
     ) {
-        let color = color_to_float(color);
+        let color = bright_srgb_color_to_surface_linear(color);
         let segments = ((radius * 2.5).round() as usize).clamp(12, 32);
         for index in 0..segments {
             let a0 = std::f32::consts::TAU * index as f32 / segments as f32;
@@ -457,8 +475,8 @@ impl VectorMesh {
             return;
         }
 
-        let top_color = color_to_float(gradient.top);
-        let bottom_color = color_to_float(gradient.bottom);
+        let top_color = bright_srgb_color_to_surface_linear(gradient.top);
+        let bottom_color = bright_srgb_color_to_surface_linear(gradient.bottom);
         let x1 = rect.x + rect.width;
         let y1 = rect.y + rect.height;
         self.add_triangle(
@@ -498,8 +516,7 @@ fn surface_config(
         .iter()
         .copied()
         .find(wgpu::TextureFormat::is_srgb)
-        .or_else(|| capabilities.formats.first().copied())
-        .ok_or_else(|| anyhow!("wgpu surface reported no supported formats"))?;
+        .ok_or_else(|| anyhow!("wgpu surface reported no supported sRGB formats"))?;
     let alpha_mode = capabilities
         .alpha_modes
         .first()
@@ -566,7 +583,10 @@ fn create_pipeline(
     })
 }
 
-fn color_to_float([r, g, b, a]: [u8; 4]) -> [f32; 4] {
+fn bright_srgb_color_to_surface_linear([r, g, b, a]: [u8; 4]) -> [f32; 4] {
+    // The swapchain is sRGB. These bytes intentionally describe the current
+    // bright display-space palette, so they are emitted as linear intensities
+    // and encoded by the surface on presentation.
     [
         r as f32 / 255.0,
         g as f32 / 255.0,
@@ -587,7 +607,7 @@ fn vertex(x: f32, y: f32, color: [f32; 4], viewport: ViewportSize) -> Vertex {
 
 #[cfg(test)]
 mod tests {
-    use super::VectorMesh;
+    use super::{VectorMesh, bright_srgb_color_to_surface_linear};
     use crate::{
         math::Vec3,
         render::{Camera, Scene, ScreenLine, ScreenText, ViewportSize, WorldLine},
@@ -643,5 +663,40 @@ mod tests {
 
         assert_eq!(mesh.vertices[0].position, [-1.0, 1.0]);
         assert_eq!(mesh.vertices[5].position, [1.0, -1.0]);
+    }
+
+    #[test]
+    fn vector_mesh_centers_degenerate_lines() {
+        let mut mesh = VectorMesh::default();
+        mesh.add_line(
+            (50, 50),
+            (50, 50),
+            [255, 255, 255, 255],
+            4,
+            ViewportSize::new(100, 100),
+        );
+
+        let min_x = mesh
+            .vertices
+            .iter()
+            .map(|vertex| vertex.position[0])
+            .fold(f32::INFINITY, f32::min);
+        let max_x = mesh
+            .vertices
+            .iter()
+            .map(|vertex| vertex.position[0])
+            .fold(f32::NEG_INFINITY, f32::max);
+
+        assert!((min_x + 0.04).abs() < 0.001);
+        assert!((max_x - 0.04).abs() < 0.001);
+    }
+
+    #[test]
+    fn bright_srgb_palette_is_preserved_for_srgb_surface_output() {
+        let color = bright_srgb_color_to_surface_linear([50, 120, 50, 255]);
+
+        assert!((color[0] - 50.0 / 255.0).abs() < f32::EPSILON);
+        assert!((color[1] - 120.0 / 255.0).abs() < f32::EPSILON);
+        assert_eq!(color[3], 1.0);
     }
 }
