@@ -1,13 +1,37 @@
-//! Presents software-rendered Battlezone frames through a wgpu surface.
+//! Presents Battlezone scenes through GPU vector geometry.
 
 use std::sync::Arc;
 
 use anyhow::{Context, Result, anyhow, bail};
 use winit::{dpi::PhysicalSize, window::Window};
 
-use crate::render::RenderedImage;
+use crate::render::{
+    BackgroundStyle, CROSSHAIR_RGBA, GROUND_FAR_RGBA, GROUND_NEAR_RGBA, HORIZON_RGBA,
+    SKY_BOTTOM_RGBA, SKY_TOP_RGBA, Scene, ScreenLine, ScreenText, ViewportSize, depth_thickness,
+    glyph_advance, glyph_rows, project_segment, text_width, world_color_rgba,
+};
 
-const FRAME_TEXTURE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
+const INITIAL_VERTEX_CAPACITY: usize = 4096;
+const VERTEX_SIZE: wgpu::BufferAddress = std::mem::size_of::<Vertex>() as wgpu::BufferAddress;
+const VERTEX_ATTRIBUTES: [wgpu::VertexAttribute; 2] = [
+    wgpu::VertexAttribute {
+        format: wgpu::VertexFormat::Float32x2,
+        offset: 0,
+        shader_location: 0,
+    },
+    wgpu::VertexAttribute {
+        format: wgpu::VertexFormat::Float32x4,
+        offset: 8,
+        shader_location: 1,
+    },
+];
+
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct Vertex {
+    position: [f32; 2],
+    color: [f32; 4],
+}
 
 pub struct GpuPresenter {
     surface: wgpu::Surface<'static>,
@@ -15,16 +39,28 @@ pub struct GpuPresenter {
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
     pipeline: wgpu::RenderPipeline,
-    bind_group_layout: wgpu::BindGroupLayout,
-    sampler: wgpu::Sampler,
-    frame_texture: Option<FrameTexture>,
+    vertex_buffer: wgpu::Buffer,
+    vertex_capacity: usize,
+    mesh: VectorMesh,
 }
 
-struct FrameTexture {
-    width: u32,
-    height: u32,
-    texture: wgpu::Texture,
-    bind_group: wgpu::BindGroup,
+#[derive(Default)]
+struct VectorMesh {
+    vertices: Vec<Vertex>,
+}
+
+#[derive(Clone, Copy)]
+struct PixelRect {
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+}
+
+#[derive(Clone, Copy)]
+struct VerticalGradient {
+    top: [u8; 4],
+    bottom: [u8; 4],
 }
 
 impl GpuPresenter {
@@ -54,9 +90,8 @@ impl GpuPresenter {
         let config = surface_config(&surface, &adapter, size)?;
         surface.configure(&device, &config);
 
-        let bind_group_layout = create_bind_group_layout(&device);
-        let sampler = create_sampler(&device);
-        let pipeline = create_pipeline(&device, config.format, &bind_group_layout);
+        let pipeline = create_pipeline(&device, config.format);
+        let vertex_buffer = create_vertex_buffer(&device, INITIAL_VERTEX_CAPACITY);
 
         Ok(Self {
             surface,
@@ -64,9 +99,9 @@ impl GpuPresenter {
             queue,
             config,
             pipeline,
-            bind_group_layout,
-            sampler,
-            frame_texture: None,
+            vertex_buffer,
+            vertex_capacity: INITIAL_VERTEX_CAPACITY,
+            mesh: VectorMesh::default(),
         })
     }
 
@@ -80,8 +115,19 @@ impl GpuPresenter {
         self.surface.configure(&self.device, &self.config);
     }
 
-    pub fn present(&mut self, image: &RenderedImage) -> Result<()> {
-        self.update_frame_texture(image)?;
+    pub fn present(&mut self, scene: &Scene) -> Result<()> {
+        let viewport = ViewportSize::new(self.config.width, self.config.height);
+        self.mesh.rebuild(scene, viewport);
+        if self.mesh.vertices.is_empty() {
+            bail!("vector scene produced no vertices");
+        }
+
+        self.ensure_vertex_capacity(self.mesh.vertices.len());
+        self.queue.write_buffer(
+            &self.vertex_buffer,
+            0,
+            bytemuck::cast_slice(&self.mesh.vertices),
+        );
 
         let output = match self.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(output)
@@ -101,14 +147,10 @@ impl GpuPresenter {
         let output_view = output
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
-        let frame_texture = self
-            .frame_texture
-            .as_ref()
-            .ok_or_else(|| anyhow!("frame texture was not initialized"))?;
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Battlezone present encoder"),
+                label: Some("Battlezone vector present encoder"),
             });
 
         {
@@ -122,7 +164,7 @@ impl GpuPresenter {
                 },
             };
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Battlezone present pass"),
+                label: Some("Battlezone vector present pass"),
                 color_attachments: &[Some(color_attachment)],
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
@@ -130,8 +172,8 @@ impl GpuPresenter {
                 multiview_mask: None,
             });
             render_pass.set_pipeline(&self.pipeline);
-            render_pass.set_bind_group(0, &frame_texture.bind_group, &[]);
-            render_pass.draw(0..3, 0..1);
+            render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+            render_pass.draw(0..self.mesh.vertices.len() as u32, 0..1);
         }
 
         self.queue.submit([encoder.finish()]);
@@ -139,104 +181,310 @@ impl GpuPresenter {
         Ok(())
     }
 
-    fn update_frame_texture(&mut self, image: &RenderedImage) -> Result<()> {
-        if image.width == 0 || image.height == 0 {
-            bail!("cannot present an empty frame");
-        }
-        if image.pixels.len() != image.width as usize * image.height as usize * 4 {
-            bail!(
-                "frame pixel data has {} bytes, expected {}",
-                image.pixels.len(),
-                image.width as usize * image.height as usize * 4
-            );
+    fn ensure_vertex_capacity(&mut self, required: usize) {
+        if required <= self.vertex_capacity {
+            return;
         }
 
-        let needs_recreate = self
-            .frame_texture
-            .as_ref()
-            .is_none_or(|texture| texture.width != image.width || texture.height != image.height);
-        if needs_recreate {
-            self.frame_texture = Some(FrameTexture::new(
-                &self.device,
-                &self.bind_group_layout,
-                &self.sampler,
-                image.width,
-                image.height,
-            ));
-        }
-
-        let frame_texture = self
-            .frame_texture
-            .as_ref()
-            .ok_or_else(|| anyhow!("frame texture was not initialized"))?;
-        self.queue.write_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: &frame_texture.texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            &image.pixels,
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(image.width * 4),
-                rows_per_image: Some(image.height),
-            },
-            wgpu::Extent3d {
-                width: image.width,
-                height: image.height,
-                depth_or_array_layers: 1,
-            },
-        );
-        Ok(())
+        self.vertex_capacity = required.next_power_of_two();
+        self.vertex_buffer = create_vertex_buffer(&self.device, self.vertex_capacity);
     }
 }
 
-impl FrameTexture {
-    fn new(
-        device: &wgpu::Device,
-        bind_group_layout: &wgpu::BindGroupLayout,
-        sampler: &wgpu::Sampler,
-        width: u32,
-        height: u32,
-    ) -> Self {
-        let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("Battlezone software frame texture"),
-            size: wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: FRAME_TEXTURE_FORMAT,
-            usage: wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::TEXTURE_BINDING,
-            view_formats: &[],
-        });
-        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Battlezone software frame bind group"),
-            layout: bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(sampler),
-                },
-            ],
-        });
+impl VectorMesh {
+    fn rebuild(&mut self, scene: &Scene, viewport: ViewportSize) {
+        self.vertices.clear();
+        self.add_background(scene.background, viewport);
 
-        Self {
-            width,
-            height,
-            texture,
-            bind_group,
+        let focal = viewport.width as f32 * 0.58;
+        for line in &scene.world_lines {
+            if let Some((start, end, depth)) = project_segment(
+                scene.camera,
+                line.start,
+                line.end,
+                viewport.width,
+                viewport.height,
+                focal,
+            ) {
+                self.add_line(
+                    start,
+                    end,
+                    world_color_rgba(depth, line.brightness, line.color),
+                    depth_thickness(depth),
+                    viewport,
+                );
+            }
+        }
+
+        for line in &scene.overlay_lines {
+            self.add_screen_line(line, viewport);
+        }
+
+        for dot in &scene.overlay_dots {
+            self.add_dot(
+                dot.center.0 as f32,
+                dot.center.1 as f32,
+                dot.radius.max(1) as f32,
+                dot.color,
+                viewport,
+            );
+        }
+
+        for text in &scene.overlay_text {
+            self.add_text(text, viewport);
+        }
+
+        if scene.show_crosshair {
+            self.add_crosshair(viewport);
         }
     }
+
+    fn add_background(&mut self, background: BackgroundStyle, viewport: ViewportSize) {
+        match background {
+            BackgroundStyle::GradientHorizon => {
+                let horizon = viewport.height as f32 * 0.5;
+                self.add_rect_gradient(
+                    PixelRect {
+                        x: 0.0,
+                        y: 0.0,
+                        width: viewport.width as f32,
+                        height: horizon,
+                    },
+                    VerticalGradient {
+                        top: SKY_TOP_RGBA,
+                        bottom: SKY_BOTTOM_RGBA,
+                    },
+                    viewport,
+                );
+                self.add_rect_gradient(
+                    PixelRect {
+                        x: 0.0,
+                        y: horizon,
+                        width: viewport.width as f32,
+                        height: viewport.height as f32 - horizon,
+                    },
+                    VerticalGradient {
+                        top: GROUND_FAR_RGBA,
+                        bottom: GROUND_NEAR_RGBA,
+                    },
+                    viewport,
+                );
+                self.add_line(
+                    (0, horizon.round() as i32),
+                    (viewport.width as i32 - 1, horizon.round() as i32),
+                    HORIZON_RGBA,
+                    1,
+                    viewport,
+                );
+            }
+            BackgroundStyle::Solid(color) => {
+                self.add_rect(
+                    PixelRect {
+                        x: 0.0,
+                        y: 0.0,
+                        width: viewport.width as f32,
+                        height: viewport.height as f32,
+                    },
+                    color,
+                    viewport,
+                );
+            }
+        }
+    }
+
+    fn add_screen_line(&mut self, line: &ScreenLine, viewport: ViewportSize) {
+        self.add_line(line.start, line.end, line.color, line.thickness, viewport);
+    }
+
+    fn add_line(
+        &mut self,
+        start: (i32, i32),
+        end: (i32, i32),
+        color: [u8; 4],
+        thickness: i32,
+        viewport: ViewportSize,
+    ) {
+        let start = (start.0 as f32, start.1 as f32);
+        let end = (end.0 as f32, end.1 as f32);
+        let dx = end.0 - start.0;
+        let dy = end.1 - start.1;
+        let length = (dx * dx + dy * dy).sqrt();
+        if length <= f32::EPSILON {
+            self.add_rect(
+                PixelRect {
+                    x: start.0,
+                    y: start.1,
+                    width: thickness.max(1) as f32,
+                    height: thickness.max(1) as f32,
+                },
+                color,
+                viewport,
+            );
+            return;
+        }
+
+        let radius = thickness.max(1) as f32 * 0.5;
+        let nx = -dy / length * radius;
+        let ny = dx / length * radius;
+        let color = color_to_float(color);
+        self.add_triangle(
+            vertex(start.0 + nx, start.1 + ny, color, viewport),
+            vertex(start.0 - nx, start.1 - ny, color, viewport),
+            vertex(end.0 + nx, end.1 + ny, color, viewport),
+        );
+        self.add_triangle(
+            vertex(end.0 + nx, end.1 + ny, color, viewport),
+            vertex(start.0 - nx, start.1 - ny, color, viewport),
+            vertex(end.0 - nx, end.1 - ny, color, viewport),
+        );
+    }
+
+    fn add_crosshair(&mut self, viewport: ViewportSize) {
+        let cx = (viewport.width / 2) as i32;
+        let cy = (viewport.height / 2) as i32;
+        for (start, end) in [
+            ((cx - 12, cy), (cx - 3, cy)),
+            ((cx + 3, cy), (cx + 12, cy)),
+            ((cx, cy - 12), (cx, cy - 3)),
+            ((cx, cy + 3), (cx, cy + 12)),
+        ] {
+            self.add_line(start, end, CROSSHAIR_RGBA, 1, viewport);
+        }
+        self.add_rect(
+            PixelRect {
+                x: cx as f32,
+                y: cy as f32,
+                width: 1.0,
+                height: 1.0,
+            },
+            CROSSHAIR_RGBA,
+            viewport,
+        );
+    }
+
+    fn add_dot(
+        &mut self,
+        center_x: f32,
+        center_y: f32,
+        radius: f32,
+        color: [u8; 4],
+        viewport: ViewportSize,
+    ) {
+        let color = color_to_float(color);
+        let segments = ((radius * 2.5).round() as usize).clamp(12, 32);
+        for index in 0..segments {
+            let a0 = std::f32::consts::TAU * index as f32 / segments as f32;
+            let a1 = std::f32::consts::TAU * (index + 1) as f32 / segments as f32;
+            self.add_triangle(
+                vertex(center_x, center_y, color, viewport),
+                vertex(
+                    center_x + a0.cos() * radius,
+                    center_y + a0.sin() * radius,
+                    color,
+                    viewport,
+                ),
+                vertex(
+                    center_x + a1.cos() * radius,
+                    center_y + a1.sin() * radius,
+                    color,
+                    viewport,
+                ),
+            );
+        }
+    }
+
+    fn add_text(&mut self, text: &ScreenText, viewport: ViewportSize) {
+        let scale = i32::from(text.scale.max(1));
+        let width = text_width(&text.text, scale);
+        let start_x = if text.centered {
+            text.position.0 - width / 2
+        } else {
+            text.position.0
+        };
+
+        for (index, glyph) in text.text.chars().enumerate() {
+            let x = start_x + index as i32 * glyph_advance(scale);
+            self.add_glyph_rects(x, text.position.1, glyph, text.color, scale, viewport);
+        }
+    }
+
+    fn add_glyph_rects(
+        &mut self,
+        x: i32,
+        y: i32,
+        glyph: char,
+        color: [u8; 4],
+        scale: i32,
+        viewport: ViewportSize,
+    ) {
+        for (row_index, bits) in glyph_rows(glyph).iter().enumerate() {
+            for col in 0..5 {
+                if (bits >> (4 - col)) & 1 == 0 {
+                    continue;
+                }
+                self.add_rect(
+                    PixelRect {
+                        x: (x + col * scale) as f32,
+                        y: (y + row_index as i32 * scale) as f32,
+                        width: scale as f32,
+                        height: scale as f32,
+                    },
+                    color,
+                    viewport,
+                );
+            }
+        }
+    }
+
+    fn add_rect(&mut self, rect: PixelRect, color: [u8; 4], viewport: ViewportSize) {
+        self.add_rect_gradient(
+            rect,
+            VerticalGradient {
+                top: color,
+                bottom: color,
+            },
+            viewport,
+        );
+    }
+
+    fn add_rect_gradient(
+        &mut self,
+        rect: PixelRect,
+        gradient: VerticalGradient,
+        viewport: ViewportSize,
+    ) {
+        if rect.width <= 0.0 || rect.height <= 0.0 {
+            return;
+        }
+
+        let top_color = color_to_float(gradient.top);
+        let bottom_color = color_to_float(gradient.bottom);
+        let x1 = rect.x + rect.width;
+        let y1 = rect.y + rect.height;
+        self.add_triangle(
+            vertex(rect.x, rect.y, top_color, viewport),
+            vertex(rect.x, y1, bottom_color, viewport),
+            vertex(x1, rect.y, top_color, viewport),
+        );
+        self.add_triangle(
+            vertex(x1, rect.y, top_color, viewport),
+            vertex(rect.x, y1, bottom_color, viewport),
+            vertex(x1, y1, bottom_color, viewport),
+        );
+    }
+
+    fn add_triangle(&mut self, a: Vertex, b: Vertex, c: Vertex) {
+        self.vertices.extend([a, b, c]);
+    }
+}
+
+fn create_vertex_buffer(device: &wgpu::Device, vertex_capacity: usize) -> wgpu::Buffer {
+    device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("Battlezone vector vertex buffer"),
+        size: (vertex_capacity as wgpu::BufferAddress * VERTEX_SIZE).max(VERTEX_SIZE),
+        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    })
 }
 
 fn surface_config(
@@ -270,68 +518,37 @@ fn surface_config(
     })
 }
 
-fn create_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
-    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: Some("Battlezone software frame bind group layout"),
-        entries: &[
-            wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                    multisampled: false,
-                },
-                count: None,
-            },
-            wgpu::BindGroupLayoutEntry {
-                binding: 1,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                count: None,
-            },
-        ],
-    })
-}
-
-fn create_sampler(device: &wgpu::Device) -> wgpu::Sampler {
-    device.create_sampler(&wgpu::SamplerDescriptor {
-        label: Some("Battlezone software frame sampler"),
-        address_mode_u: wgpu::AddressMode::ClampToEdge,
-        address_mode_v: wgpu::AddressMode::ClampToEdge,
-        address_mode_w: wgpu::AddressMode::ClampToEdge,
-        mag_filter: wgpu::FilterMode::Nearest,
-        min_filter: wgpu::FilterMode::Nearest,
-        mipmap_filter: wgpu::MipmapFilterMode::Nearest,
-        ..Default::default()
-    })
-}
-
 fn create_pipeline(
     device: &wgpu::Device,
     target_format: wgpu::TextureFormat,
-    bind_group_layout: &wgpu::BindGroupLayout,
 ) -> wgpu::RenderPipeline {
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("Battlezone frame blit shader"),
-        source: wgpu::ShaderSource::Wgsl(include_str!("blit.wgsl").into()),
+        label: Some("Battlezone vector shader"),
+        source: wgpu::ShaderSource::Wgsl(include_str!("vector.wgsl").into()),
     });
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-        label: Some("Battlezone present pipeline layout"),
-        bind_group_layouts: &[Some(bind_group_layout)],
+        label: Some("Battlezone vector pipeline layout"),
+        bind_group_layouts: &[],
         immediate_size: 0,
     });
 
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("Battlezone present pipeline"),
+        label: Some("Battlezone vector pipeline"),
         layout: Some(&pipeline_layout),
         vertex: wgpu::VertexState {
             module: &shader,
             entry_point: Some("vs_main"),
             compilation_options: wgpu::PipelineCompilationOptions::default(),
-            buffers: &[],
+            buffers: &[wgpu::VertexBufferLayout {
+                array_stride: VERTEX_SIZE,
+                step_mode: wgpu::VertexStepMode::Vertex,
+                attributes: &VERTEX_ATTRIBUTES,
+            }],
         },
-        primitive: wgpu::PrimitiveState::default(),
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleList,
+            ..Default::default()
+        },
         depth_stencil: None,
         multisample: wgpu::MultisampleState::default(),
         fragment: Some(wgpu::FragmentState {
@@ -340,11 +557,91 @@ fn create_pipeline(
             compilation_options: wgpu::PipelineCompilationOptions::default(),
             targets: &[Some(wgpu::ColorTargetState {
                 format: target_format,
-                blend: Some(wgpu::BlendState::REPLACE),
+                blend: Some(wgpu::BlendState::ALPHA_BLENDING),
                 write_mask: wgpu::ColorWrites::ALL,
             })],
         }),
         multiview_mask: None,
         cache: None,
     })
+}
+
+fn color_to_float([r, g, b, a]: [u8; 4]) -> [f32; 4] {
+    [
+        r as f32 / 255.0,
+        g as f32 / 255.0,
+        b as f32 / 255.0,
+        a as f32 / 255.0,
+    ]
+}
+
+fn vertex(x: f32, y: f32, color: [f32; 4], viewport: ViewportSize) -> Vertex {
+    Vertex {
+        position: [
+            x / viewport.width as f32 * 2.0 - 1.0,
+            1.0 - y / viewport.height as f32 * 2.0,
+        ],
+        color,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::VectorMesh;
+    use crate::{
+        math::Vec3,
+        render::{Camera, Scene, ScreenLine, ScreenText, ViewportSize, WorldLine},
+    };
+
+    #[test]
+    fn vector_mesh_builds_scene_without_bitmap_pixels() {
+        let mut scene = Scene::empty(Camera {
+            position: Vec3::new(0.0, 0.0, 0.0),
+            heading: 0.0,
+        });
+        scene.world_lines.push(WorldLine {
+            start: Vec3::new(-1.0, 0.0, 8.0),
+            end: Vec3::new(1.0, 0.0, 8.0),
+            brightness: 1.0,
+            color: None,
+        });
+        scene.overlay_lines.push(ScreenLine {
+            start: (10, 10),
+            end: (30, 10),
+            color: [255, 255, 255, 255],
+            thickness: 2,
+        });
+        scene.overlay_text.push(ScreenText {
+            position: (20, 20),
+            text: String::from("HI"),
+            color: [180, 255, 180, 255],
+            scale: 2,
+            centered: false,
+        });
+        scene.show_crosshair = true;
+
+        let mut mesh = VectorMesh::default();
+        mesh.rebuild(&scene, ViewportSize::new(640, 360));
+
+        assert!(mesh.vertices.len() > 18);
+        assert_eq!(mesh.vertices.len() % 3, 0);
+    }
+
+    #[test]
+    fn vector_mesh_uses_full_screen_coordinates() {
+        let mut mesh = VectorMesh::default();
+        mesh.add_rect(
+            super::PixelRect {
+                x: 0.0,
+                y: 0.0,
+                width: 320.0,
+                height: 180.0,
+            },
+            [255, 255, 255, 255],
+            ViewportSize::new(320, 180),
+        );
+
+        assert_eq!(mesh.vertices[0].position, [-1.0, 1.0]);
+        assert_eq!(mesh.vertices[5].position, [1.0, -1.0]);
+    }
 }

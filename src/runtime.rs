@@ -18,7 +18,7 @@ use crate::{
     constants::MAX_DT,
     game::Game,
     input::{InputEvent, InputTracker, UpdateInput},
-    render::{RenderedImage, Renderer, ViewportSize},
+    render::{Scene, ViewportSize},
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -29,19 +29,19 @@ pub enum RuntimeEvent {
 
 pub struct GameRuntime {
     command_tx: Sender<RuntimeCommand>,
-    frames: FrameMailbox,
+    scenes: SceneMailbox,
     handle: Option<JoinHandle<()>>,
 }
 
 #[derive(Clone, Default)]
-struct FrameMailbox {
+struct SceneMailbox {
     buffers: Arc<Mutex<DoubleBuffer>>,
 }
 
 #[derive(Default)]
 struct DoubleBuffer {
-    front: Option<RenderedImage>,
-    back: Option<RenderedImage>,
+    front: Option<Scene>,
+    back: Option<Scene>,
 }
 
 enum RuntimeCommand {
@@ -53,9 +53,8 @@ enum RuntimeCommand {
 
 struct RuntimeWorker {
     command_rx: Receiver<RuntimeCommand>,
-    frames: FrameMailbox,
+    scenes: SceneMailbox,
     event_proxy: EventLoopProxy<RuntimeEvent>,
-    renderer: Renderer,
     game: Game,
     audio: AudioManager,
     input_tracker: InputTracker,
@@ -64,16 +63,16 @@ struct RuntimeWorker {
 impl GameRuntime {
     pub fn spawn(size: ViewportSize, event_proxy: EventLoopProxy<RuntimeEvent>) -> Result<Self> {
         let (command_tx, command_rx) = mpsc::channel();
-        let frames = FrameMailbox::default();
-        let worker_frames = frames.clone();
+        let scenes = SceneMailbox::default();
+        let worker_scenes = scenes.clone();
         let handle = thread::Builder::new()
             .name(String::from("battlezone-game"))
-            .spawn(move || RuntimeWorker::new(command_rx, worker_frames, event_proxy, size).run())
+            .spawn(move || RuntimeWorker::new(command_rx, worker_scenes, event_proxy, size).run())
             .context("spawning Battlezone game thread")?;
 
         Ok(Self {
             command_tx,
-            frames,
+            scenes,
             handle: Some(handle),
         })
     }
@@ -90,8 +89,8 @@ impl GameRuntime {
         self.send(RuntimeCommand::ClearInput);
     }
 
-    pub fn take_frame(&self) -> Option<RenderedImage> {
-        self.frames.take()
+    pub fn take_scene(&self) -> Option<Scene> {
+        self.scenes.take()
     }
 
     pub fn shutdown(&mut self) {
@@ -112,31 +111,31 @@ impl Drop for GameRuntime {
     }
 }
 
-impl FrameMailbox {
-    fn publish(&self, frame: RenderedImage) {
+impl SceneMailbox {
+    fn publish(&self, scene: Scene) {
         let mut buffers = self
             .buffers
             .lock()
-            .expect("frame mailbox lock should not be poisoned");
-        buffers.publish(frame);
+            .expect("scene mailbox lock should not be poisoned");
+        buffers.publish(scene);
     }
 
-    fn take(&self) -> Option<RenderedImage> {
+    fn take(&self) -> Option<Scene> {
         let mut buffers = self
             .buffers
             .lock()
-            .expect("frame mailbox lock should not be poisoned");
+            .expect("scene mailbox lock should not be poisoned");
         buffers.take()
     }
 }
 
 impl DoubleBuffer {
-    fn publish(&mut self, frame: RenderedImage) {
-        self.back = Some(frame);
+    fn publish(&mut self, scene: Scene) {
+        self.back = Some(scene);
         std::mem::swap(&mut self.front, &mut self.back);
     }
 
-    fn take(&mut self) -> Option<RenderedImage> {
+    fn take(&mut self) -> Option<Scene> {
         self.front.take()
     }
 }
@@ -144,19 +143,17 @@ impl DoubleBuffer {
 impl RuntimeWorker {
     fn new(
         command_rx: Receiver<RuntimeCommand>,
-        frames: FrameMailbox,
+        scenes: SceneMailbox,
         event_proxy: EventLoopProxy<RuntimeEvent>,
         size: ViewportSize,
     ) -> Self {
-        let renderer = Renderer::new(size);
         let mut game = Game::load();
-        game.set_viewport(renderer.image_width(), renderer.image_height());
+        game.set_viewport(size.width, size.height);
 
         Self {
             command_rx,
-            frames,
+            scenes,
             event_proxy,
-            renderer,
             game,
             audio: AudioManager::new(),
             input_tracker: InputTracker::new(),
@@ -221,15 +218,11 @@ impl RuntimeWorker {
     }
 
     fn resize(&mut self, size: ViewportSize) {
-        self.renderer.resize(size);
-        self.game
-            .set_viewport(self.renderer.image_width(), self.renderer.image_height());
+        self.game.set_viewport(size.width, size.height);
     }
 
     fn publish_frame(&mut self) {
-        let scene = self.game.frame();
-        let image = self.renderer.render(&scene);
-        self.frames.publish(image);
+        self.scenes.publish(self.game.frame());
         let _ = self.event_proxy.send_event(RuntimeEvent::FrameReady);
     }
 }
@@ -289,10 +282,11 @@ fn repeated_input(input: UpdateInput) -> UpdateInput {
 
 #[cfg(test)]
 mod tests {
-    use super::{FrameMailbox, consume_fixed_steps, repeated_input};
+    use super::{SceneMailbox, consume_fixed_steps, repeated_input};
     use crate::{
         input::UpdateInput,
-        render::{RenderedImage, ViewportSize},
+        math::Vec3,
+        render::{Camera, Scene},
     };
 
     #[test]
@@ -350,22 +344,20 @@ mod tests {
     }
 
     #[test]
-    fn frame_mailbox_returns_latest_published_frame_once() {
-        let frames = FrameMailbox::default();
-        frames.publish(test_image(ViewportSize::new(320, 180)));
-        frames.publish(test_image(ViewportSize::new(640, 360)));
+    fn scene_mailbox_returns_latest_published_scene_once() {
+        let scenes = SceneMailbox::default();
+        scenes.publish(test_scene(0.0));
+        scenes.publish(test_scene(1.0));
 
-        let latest = frames.take().expect("latest frame should be available");
-        assert_eq!(latest.width, 640);
-        assert_eq!(latest.height, 360);
-        assert!(frames.take().is_none());
+        let latest = scenes.take().expect("latest scene should be available");
+        assert_eq!(latest.camera.heading, 1.0);
+        assert!(scenes.take().is_none());
     }
 
-    fn test_image(size: ViewportSize) -> RenderedImage {
-        RenderedImage {
-            width: size.width,
-            height: size.height,
-            pixels: vec![0; size.width as usize * size.height as usize * 4],
-        }
+    fn test_scene(heading: f32) -> Scene {
+        Scene::empty(Camera {
+            position: Vec3::new(0.0, 0.0, 0.0),
+            heading,
+        })
     }
 }

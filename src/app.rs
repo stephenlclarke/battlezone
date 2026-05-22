@@ -15,7 +15,7 @@ use winit::{
 use crate::{
     gpu::GpuPresenter,
     input::{InputEvent, InputKey, InputPhase},
-    render::{RenderedImage, ViewportSize},
+    render::{Scene, ViewportSize},
     runtime::{GameRuntime, RuntimeEvent},
 };
 
@@ -45,7 +45,7 @@ struct BattlezoneApp {
     window_id: Option<WindowId>,
     gpu: Option<GpuPresenter>,
     runtime: Option<GameRuntime>,
-    latest_frame: Option<RenderedImage>,
+    latest_scene: Option<Scene>,
     redraw_requested: bool,
     error: Option<anyhow::Error>,
 }
@@ -58,7 +58,7 @@ impl BattlezoneApp {
             window_id: None,
             gpu: None,
             runtime: None,
-            latest_frame: None,
+            latest_scene: None,
             redraw_requested: false,
             error: None,
         }
@@ -150,26 +150,26 @@ impl BattlezoneApp {
         self.redraw_requested = false;
         self.take_latest_frame();
 
-        let (Some(window), Some(gpu), Some(frame)) = (
+        let (Some(window), Some(gpu), Some(scene)) = (
             self.window.as_ref(),
             self.gpu.as_mut(),
-            self.latest_frame.as_ref(),
+            self.latest_scene.as_ref(),
         ) else {
             return Ok(());
         };
 
         window.pre_present_notify();
-        gpu.present(frame)
+        gpu.present(scene)
     }
 
     fn take_latest_frame(&mut self) -> bool {
         let Some(runtime) = &self.runtime else {
             return false;
         };
-        let Some(frame) = runtime.take_frame() else {
+        let Some(scene) = runtime.take_scene() else {
             return false;
         };
-        self.latest_frame = Some(frame);
+        self.latest_scene = Some(scene);
         true
     }
 

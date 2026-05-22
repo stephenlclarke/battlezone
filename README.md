@@ -16,7 +16,7 @@
 ---
 
 This is a self-contained Rust implementation of Atari's original Battlezone,
-rendered in a native GPU window with `wgpu`.
+rendered as vector primitives in a native GPU window with `wgpu`.
 
 The current game uses a native Rust state machine for twin-stick tread
 movement, title and high-score screens, battlefield layout, radar, enemy
@@ -50,7 +50,8 @@ Run targets:
 - `make readme-media`
 
 Run the game from a desktop session with GPU support. The app opens its own
-window and presents frames through `wgpu` using vsync-backed double buffering.
+window and presents line, dot, text, and background primitives through `wgpu`
+using vsync-backed double buffering.
 
 ## Install
 
