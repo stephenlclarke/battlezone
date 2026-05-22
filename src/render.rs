@@ -1,7 +1,6 @@
-//! Projects Battlezone world geometry into a Kitty graphics frame and draws overlay text.
+//! Projects Battlezone world geometry into a software frame and draws overlay text.
 
 use crate::math::{Vec3, rotate_y};
-use crate::terminal::TerminalGeometry;
 
 const NEAR_PLANE: f32 = 0.2;
 const SKY_TOP: Color = Color(6, 10, 8, 255);
@@ -75,6 +74,13 @@ pub enum BackgroundStyle {
     Solid([u8; 4]),
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ViewportSize {
+    pub width: u32,
+    pub height: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RenderedImage {
     pub width: u32,
     pub height: u32,
@@ -110,9 +116,18 @@ impl Scene {
     }
 }
 
+impl ViewportSize {
+    pub fn new(width: u32, height: u32) -> Self {
+        Self {
+            width: width.max(1),
+            height: height.max(1),
+        }
+    }
+}
+
 impl Renderer {
-    pub fn new(geometry: TerminalGeometry) -> Self {
-        let (image_width, image_height) = raster_size(geometry);
+    pub fn new(size: ViewportSize) -> Self {
+        let (image_width, image_height) = raster_size(size);
         Self {
             image_width,
             image_height,
@@ -120,8 +135,8 @@ impl Renderer {
         }
     }
 
-    pub fn resize(&mut self, geometry: TerminalGeometry) {
-        *self = Self::new(geometry);
+    pub fn resize(&mut self, size: ViewportSize) {
+        *self = Self::new(size);
     }
 
     pub fn image_width(&self) -> u32 {
@@ -362,19 +377,8 @@ impl Color {
     }
 }
 
-fn raster_size(geometry: TerminalGeometry) -> (u32, u32) {
-    let source_width = if geometry.pixel_width > 0 {
-        geometry.pixel_width as u32
-    } else {
-        u32::from(geometry.cols.max(40)) * 16
-    };
-    let source_height = if geometry.pixel_height > 0 {
-        geometry.pixel_height as u32
-    } else {
-        u32::from(geometry.rows.max(18)) * 32
-    };
-
-    scale_to_fit(source_width, source_height, 960, 720)
+fn raster_size(size: ViewportSize) -> (u32, u32) {
+    scale_to_fit(size.width, size.height, 960, 720)
 }
 
 fn scale_to_fit(width: u32, height: u32, max_width: u32, max_height: u32) -> (u32, u32) {
@@ -629,11 +633,10 @@ fn glyph_rows(glyph: char) -> [u8; 7] {
 #[cfg(test)]
 mod tests {
     use super::{
-        Camera, Scene, ScreenDot, ScreenLine, ScreenText, WorldLine, clip_to_near_plane,
-        clip_to_viewport, out_code, project_segment, raster_size, scale_to_fit,
+        Camera, Scene, ScreenDot, ScreenLine, ScreenText, ViewportSize, WorldLine,
+        clip_to_near_plane, clip_to_viewport, out_code, project_segment, raster_size, scale_to_fit,
     };
     use crate::math::Vec3;
-    use crate::terminal::TerminalGeometry;
 
     #[test]
     fn scale_to_fit_preserves_bounds() {
@@ -687,14 +690,20 @@ mod tests {
     }
 
     #[test]
-    fn raster_size_uses_terminal_pixels_when_available() {
-        let geometry = TerminalGeometry {
-            cols: 100,
-            rows: 40,
-            pixel_width: 1200,
-            pixel_height: 800,
-        };
-        assert_eq!(raster_size(geometry), (960, 640));
+    fn raster_size_uses_viewport_pixels() {
+        let size = ViewportSize::new(1200, 800);
+        assert_eq!(raster_size(size), (960, 640));
+    }
+
+    #[test]
+    fn viewport_size_clamps_zero_dimensions() {
+        assert_eq!(
+            ViewportSize::new(0, 0),
+            ViewportSize {
+                width: 1,
+                height: 1
+            }
+        );
     }
 
     #[test]
@@ -746,13 +755,7 @@ mod tests {
 
     #[test]
     fn renderer_draws_overlay_text_and_geometry_pixels() {
-        let geometry = TerminalGeometry {
-            cols: 80,
-            rows: 24,
-            pixel_width: 800,
-            pixel_height: 480,
-        };
-        let renderer = super::Renderer::new(geometry);
+        let renderer = super::Renderer::new(ViewportSize::new(800, 480));
         let mut scene = Scene::empty(Camera {
             position: Vec3::new(0.0, 0.0, 0.0),
             heading: 0.0,
