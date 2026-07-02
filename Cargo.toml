@@ -14,10 +14,10 @@ anyhow = "1.0"
 bytemuck = { version = "1.25", features = ["derive"] }
 fastrand = "2.3"
 pollster = "0.4"
-rodio = "0.21"
-wgpu = "29"
+rodio = "0.22"
+wgpu = "30"
 winit = "0.30"
 
 [dev-dependencies]
-gif = "0.13"
+gif = "0.14"
 png = "0.18"
