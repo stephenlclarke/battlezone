@@ -2,17 +2,17 @@
 
 use std::time::Duration;
 
-use rodio::{OutputStream, OutputStreamBuilder, Sink, Source, source::SineWave};
+use rodio::{DeviceSinkBuilder, MixerDeviceSink, Player, Source, source::SineWave};
 
 use crate::game::GameEvent;
 
 struct AudioOutput {
-    stream: OutputStream,
+    sink: MixerDeviceSink,
 }
 
 pub struct AudioManager {
     output: Option<AudioOutput>,
-    title_drone: Option<Sink>,
+    title_drone: Option<Player>,
 }
 
 impl Default for AudioManager {
@@ -23,13 +23,13 @@ impl Default for AudioManager {
 
 impl AudioOutput {
     fn new() -> Option<Self> {
-        let mut stream = OutputStreamBuilder::open_default_stream().ok()?;
-        stream.log_on_drop(false);
-        Some(Self { stream })
+        let mut sink = DeviceSinkBuilder::open_default_sink().ok()?;
+        sink.log_on_drop(false);
+        Some(Self { sink })
     }
 
-    fn new_sink(&self) -> Sink {
-        Sink::connect_new(self.stream.mixer())
+    fn new_sink(&self) -> Player {
+        Player::connect_new(self.sink.mixer())
     }
 }
 
