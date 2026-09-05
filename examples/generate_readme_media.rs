@@ -502,7 +502,7 @@ struct RgbaImage {
 impl RgbaImage {
     fn new(width: u32, height: u32, color: [u8; 4]) -> Self {
         let mut pixels = vec![0; (width * height * 4) as usize];
-        for chunk in pixels.chunks_exact_mut(4) {
+        for chunk in pixels.as_chunks_mut::<4>().0 {
             chunk.copy_from_slice(&color);
         }
 
