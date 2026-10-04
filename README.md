@@ -15,8 +15,7 @@
 
 ---
 
-This is a self-contained Rust implementation of Atari's original Battlezone,
-rendered through the Kitty graphics protocol.
+This is a self-contained Rust implementation of Atari's original Battlezone, rendered in a native window through wgpu.
 
 The current game uses a native Rust state machine for twin-stick tread
 movement, title and high-score screens, battlefield layout, radar, enemy
@@ -49,12 +48,22 @@ Run targets:
 - `make sq`
 - `make readme-media`
 
-Run this inside `kitty`, `ghostty`, `warp` or another terminal that supports the
-Kitty graphics protocol.
+Run `cargo run` or `make run` to open the Battlezone window. A graphical desktop and a wgpu-compatible GPU are required.
 
 ## Install
 
-Install directly from git with Cargo:
+Install with Homebrew:
+
+```sh
+brew tap stephenlclarke/tap
+brew install stephenlclarke/tap/battlezone
+battlezone --help
+battlezone
+```
+
+To replace an older Kitty build, run `brew update` followed by `brew upgrade stephenlclarke/tap/battlezone`. Homebrew builds the pinned wgpu source with Rust; Linux builds also require ALSA and pkgconf, which the formula declares. Interactive play requires a graphical desktop and suitable GPU. The `--help` and `--version` commands work without a display.
+
+Alternatively, install directly from git with Cargo:
 
 - `cargo install --git https://github.com/stephenlclarke/battlezone battlezone`
 
@@ -87,10 +96,7 @@ Arcade play controls:
 - `Space`: fire
 - `Esc`: quit
 
-On terminals with key press/release reporting, holding `Q` + `P` together drives
-both treads forward like `Up`, and holding `A` + `L` together drives both
-treads backward like `Down`. On simpler terminals, use the arrow keys for
-reliable combined-tread movement.
+Holding `Q` + `P` together drives both treads forward like `Up`, and holding `A` + `L` together drives both treads backward like `Down`. Key releases stop the corresponding control; losing window focus clears held controls. Close the window or press `Esc` to quit.
 
 ## XYZZY Mode
 
@@ -227,13 +233,8 @@ rotation, and collision radius.
 
 ## Platform Support
 
-The game is intended for Unix-like environments with a terminal that speaks the
-Kitty graphics protocol.
+macOS is the primary development platform. The native window uses winit and wgpu, following the Defender port, with Metal on macOS and the available wgpu backends elsewhere. Linux and Windows still need broader real-world validation.
 
-macOS is the primary target because it has been the main development platform.
-Linux should also work, but the audio and terminal stack still need broader
-real-world validation.
+The existing CPU renderer produces RGBA frames, which wgpu uploads to a reusable texture and presents without PNG encoding or terminal escape sequences. Window resizing updates the game viewport; raster resolution remains capped at 960 x 720.
 
-For automated docs media generation or headless regression work, use the
-examples under `examples/` rather than trying to capture an interactive terminal
-session directly.
+For automated docs media generation or headless regression work, use the examples under `examples/`. The checked-in media predates the native window port.

@@ -1,105 +1,185 @@
-//! Runs the terminal application loop, input polling, fixed-timestep updates, and frame presentation.
-
-use std::{
-    io::{Write, stdout},
-    time::{Duration, Instant},
-};
-
-use anyhow::Result;
-use crossterm::{
-    cursor::MoveTo,
-    queue,
-    terminal::{Clear, ClearType},
-};
-
+//! Native window lifecycle, fixed-timestep game updates, and GPU presentation.
 use crate::{
     arcade::ORIGINAL_FRAME_TIME,
     audio::AudioManager,
     constants::MAX_DT,
     game::Game,
-    input::{InputTracker, UpdateInput},
-    kitty::KittyGraphics,
-    render::Renderer,
-    terminal::{TerminalSession, geometry},
+    graphics::Graphics,
+    input::InputTracker,
+    render::{RenderSize, Renderer},
+};
+use anyhow::{Context, Result};
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
+use winit::{
+    application::ApplicationHandler,
+    event::{ElementState, WindowEvent},
+    event_loop::{ActiveEventLoop, ControlFlow, EventLoop},
+    keyboard::PhysicalKey,
+    window::{Window, WindowId},
 };
 
 pub fn run() -> Result<()> {
-    KittyGraphics::ensure_supported()?;
+    let event_loop = EventLoop::new().context("creating window event loop")?;
+    let mut app = App::new();
+    event_loop
+        .run_app(&mut app)
+        .context("running window event loop")?;
+    match app.error {
+        Some(error) => Err(error),
+        None => Ok(()),
+    }
+}
 
-    let mut stdout = stdout();
-    let session = TerminalSession::enter(&mut stdout)?;
-    queue!(stdout, Clear(ClearType::All), MoveTo(0, 0))?;
-    stdout.flush()?;
+struct App {
+    window: Option<Arc<Window>>,
+    graphics: Option<Graphics>,
+    renderer: Renderer,
+    game: Game,
+    audio: AudioManager,
+    input: InputTracker,
+    last_tick: Instant,
+    accumulator: f32,
+    error: Option<anyhow::Error>,
+}
 
-    let mut terminal_geometry = geometry()?;
-    let mut renderer = Renderer::new(terminal_geometry);
-    let mut graphics = KittyGraphics::new(terminal_geometry.cols, terminal_geometry.rows);
-    let mut game = Game::load();
-    let mut audio = AudioManager::new();
-    let mut input_tracker = InputTracker::new(session.keyboard_enhancement_supported());
-    game.set_viewport(renderer.image_width(), renderer.image_height());
-    drain_audio_events(&mut game, &mut audio);
-
-    let frame_time = ORIGINAL_FRAME_TIME;
-    let frame_duration = Duration::from_secs_f32(frame_time);
-    let mut accumulator = 0.0f32;
-    let mut last_tick = Instant::now();
-
-    loop {
-        let frame_started = Instant::now();
-        sync_terminal_geometry(
-            &mut terminal_geometry,
-            &mut renderer,
-            &mut graphics,
-            &mut game,
-        )?;
-
-        let input = input_tracker.poll()?;
-        if input.quit_requested {
-            break;
-        }
-
-        let dt = last_tick.elapsed().as_secs_f32().min(MAX_DT);
-        last_tick = Instant::now();
-        accumulator = (accumulator + dt).min(frame_time * 6.0);
-
-        let fixed_steps = consume_fixed_steps(&mut accumulator, frame_time);
-        let updated = fixed_steps > 0;
-        if updated {
-            run_fixed_updates(
-                &mut game,
-                &mut audio,
-                frame_time,
-                fixed_steps,
-                input.clone(),
-            );
-        }
-
-        if !updated {
-            game.update_with_input(dt, input);
-            drain_audio_events(&mut game, &mut audio);
-        }
-
-        let scene = game.frame();
-        let image = renderer.render(&scene);
-        graphics.draw_frame(&mut stdout, &image)?;
-        stdout.flush()?;
-
-        let elapsed = frame_started.elapsed();
-        if elapsed < frame_duration {
-            std::thread::sleep(frame_duration - elapsed);
+impl App {
+    fn new() -> Self {
+        let renderer = Renderer::new(RenderSize {
+            width: 960,
+            height: 720,
+        });
+        let mut game = Game::load();
+        game.set_viewport(renderer.image_width(), renderer.image_height());
+        Self {
+            window: None,
+            graphics: None,
+            renderer,
+            game,
+            audio: AudioManager::new(),
+            input: InputTracker::default(),
+            last_tick: Instant::now(),
+            accumulator: 0.0,
+            error: None,
         }
     }
 
-    graphics.clear(&mut stdout)?;
-    stdout.flush()?;
+    fn fail(&mut self, event_loop: &ActiveEventLoop, error: anyhow::Error) {
+        self.error = Some(error);
+        event_loop.exit();
+    }
 
-    Ok(())
+    fn initialize(&mut self, event_loop: &ActiveEventLoop) -> Result<()> {
+        if self.window.is_some() {
+            return Ok(());
+        }
+        let window = Arc::new(
+            event_loop
+                .create_window(
+                    Window::default_attributes()
+                        .with_title("Battlezone")
+                        .with_inner_size(winit::dpi::LogicalSize::new(960.0, 720.0)),
+                )
+                .context("creating Battlezone window")?,
+        );
+        self.graphics = Some(pollster::block_on(Graphics::new(window.clone()))?);
+        self.resize(window.inner_size());
+        self.window = Some(window);
+        self.last_tick = Instant::now();
+        Ok(())
+    }
+
+    fn resize(&mut self, size: winit::dpi::PhysicalSize<u32>) {
+        if let Some(graphics) = &mut self.graphics {
+            graphics.resize(size);
+        }
+        if size.width == 0 || size.height == 0 {
+            return;
+        }
+        self.renderer.resize(RenderSize {
+            width: size.width,
+            height: size.height,
+        });
+        self.game
+            .set_viewport(self.renderer.image_width(), self.renderer.image_height());
+    }
+
+    fn update(&mut self) {
+        let now = Instant::now();
+        let dt = now.duration_since(self.last_tick).as_secs_f32().min(MAX_DT);
+        self.last_tick = now;
+        self.accumulator = (self.accumulator + dt).min(ORIGINAL_FRAME_TIME * 6.0);
+        let steps = consume_fixed_steps(&mut self.accumulator, ORIGINAL_FRAME_TIME);
+        for _ in 0..steps {
+            self.game
+                .update_with_input(ORIGINAL_FRAME_TIME, self.input.drain());
+            for event in self.game.drain_events() {
+                self.audio.handle_event(event);
+            }
+        }
+    }
 }
 
-fn drain_audio_events(game: &mut Game, audio: &mut AudioManager) {
-    for event in game.drain_events() {
-        audio.handle_event(event);
+impl ApplicationHandler for App {
+    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        if let Err(error) = self.initialize(event_loop) {
+            self.fail(event_loop, error);
+        }
+    }
+    fn window_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
+        if !self.window.as_ref().is_some_and(|window| window.id() == id) {
+            return;
+        }
+        match event {
+            WindowEvent::CloseRequested => event_loop.exit(),
+            WindowEvent::Focused(false) => self.input.clear(),
+            WindowEvent::KeyboardInput { event, .. } => {
+                let pressed = event.state == ElementState::Pressed;
+                if let PhysicalKey::Code(key) = event.physical_key {
+                    if key == winit::keyboard::KeyCode::Escape && pressed {
+                        event_loop.exit();
+                    }
+                    self.input.key(key, pressed, event.repeat);
+                }
+                if pressed
+                    && !event.repeat
+                    && let Some(text) = event.text
+                {
+                    self.input.text(&text);
+                }
+            }
+            WindowEvent::Resized(size) => self.resize(size),
+            WindowEvent::RedrawRequested => {
+                if let Some(window) = &self.window {
+                    window.pre_present_notify();
+                }
+                let image = self.renderer.render(&self.game.frame());
+                if let Some(graphics) = &mut self.graphics
+                    && let Err(error) = graphics.draw(&image)
+                {
+                    self.fail(event_loop, error);
+                }
+            }
+            _ => {}
+        }
+    }
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        self.update();
+        if let Some(window) = &self.window {
+            window.request_redraw();
+        }
+        let remaining = (ORIGINAL_FRAME_TIME - self.accumulator).max(0.001);
+        event_loop.set_control_flow(ControlFlow::WaitUntil(
+            Instant::now() + Duration::from_secs_f32(remaining),
+        ));
+    }
+    fn suspended(&mut self, _event_loop: &ActiveEventLoop) {
+        self.graphics = None;
+        self.window = None;
+        self.input.clear();
+        self.accumulator = 0.0;
     }
 }
 
@@ -107,62 +187,13 @@ fn consume_fixed_steps(accumulator: &mut f32, frame_time: f32) -> usize {
     if frame_time <= 0.0 {
         return 0;
     }
-
     let steps = (*accumulator / frame_time).floor() as usize;
     *accumulator -= frame_time * steps as f32;
     steps
 }
-
-fn run_fixed_updates(
-    game: &mut Game,
-    audio: &mut AudioManager,
-    frame_time: f32,
-    fixed_steps: usize,
-    input: UpdateInput,
-) {
-    let repeated = repeated_input(input.clone());
-    let mut step_input = input;
-    for _ in 0..fixed_steps {
-        game.update_with_input(frame_time, step_input);
-        drain_audio_events(game, audio);
-        step_input = repeated.clone();
-    }
-}
-
-fn sync_terminal_geometry(
-    terminal_geometry: &mut crate::terminal::TerminalGeometry,
-    renderer: &mut Renderer,
-    graphics: &mut KittyGraphics,
-    game: &mut Game,
-) -> Result<()> {
-    let latest_geometry = geometry()?;
-    if latest_geometry != *terminal_geometry {
-        *terminal_geometry = latest_geometry;
-        renderer.resize(*terminal_geometry);
-        graphics.resize(terminal_geometry.cols, terminal_geometry.rows);
-        game.set_viewport(renderer.image_width(), renderer.image_height());
-    }
-    Ok(())
-}
-
-fn repeated_input(input: UpdateInput) -> UpdateInput {
-    UpdateInput {
-        forward: input.forward,
-        backward: input.backward,
-        turn_left: input.turn_left,
-        turn_right: input.turn_right,
-        left_tread_forward: input.left_tread_forward,
-        left_tread_backward: input.left_tread_backward,
-        right_tread_forward: input.right_tread_forward,
-        right_tread_backward: input.right_tread_backward,
-        ..UpdateInput::default()
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{consume_fixed_steps, repeated_input};
-    use crate::input::UpdateInput;
+    use super::consume_fixed_steps;
 
     #[test]
     fn consume_fixed_steps_returns_whole_frame_updates() {
@@ -177,44 +208,5 @@ mod tests {
         let mut accumulator = 0.5;
         assert_eq!(consume_fixed_steps(&mut accumulator, 0.0), 0);
         assert_eq!(accumulator, 0.5);
-    }
-
-    #[test]
-    fn repeated_input_preserves_only_movement_state() {
-        let repeated = repeated_input(UpdateInput {
-            forward: true,
-            backward: true,
-            turn_left: true,
-            turn_right: true,
-            left_tread_forward: true,
-            left_tread_backward: true,
-            right_tread_forward: true,
-            right_tread_backward: true,
-            fire: true,
-            start_requested: true,
-            quit_requested: true,
-            autopilot_toggle_requested: true,
-            initials_previous: true,
-            initials_next: true,
-            initials_confirm: true,
-            typed_chars: vec!['x'],
-        });
-
-        assert!(repeated.forward);
-        assert!(repeated.backward);
-        assert!(repeated.turn_left);
-        assert!(repeated.turn_right);
-        assert!(repeated.left_tread_forward);
-        assert!(repeated.left_tread_backward);
-        assert!(repeated.right_tread_forward);
-        assert!(repeated.right_tread_backward);
-        assert!(!repeated.fire);
-        assert!(!repeated.start_requested);
-        assert!(!repeated.quit_requested);
-        assert!(!repeated.autopilot_toggle_requested);
-        assert!(!repeated.initials_previous);
-        assert!(!repeated.initials_next);
-        assert!(!repeated.initials_confirm);
-        assert!(repeated.typed_chars.is_empty());
     }
 }

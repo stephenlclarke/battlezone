@@ -1342,7 +1342,7 @@ impl Game {
     fn begin_initials_entry(&mut self) {
         self.mode = Mode::EnteringInitials;
         self.initials = Some(InitialsEntry {
-            letters: [b'A', b'-', b'-'],
+            letters: *b"A--",
             cursor: 0,
             blink_timer: 0.0,
             blink_visible: true,

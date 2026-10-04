@@ -10,8 +10,7 @@ use battlezone::{
     arcade::ORIGINAL_FRAME_TIME,
     game::Game,
     input::UpdateInput,
-    render::{RenderedImage, Renderer},
-    terminal::TerminalGeometry,
+    render::{RenderSize, RenderedImage, Renderer},
 };
 use gif::{Encoder, Frame, Repeat};
 use png::{BitDepth, ColorType, Compression, Encoder as PngEncoder};
@@ -57,17 +56,13 @@ fn main() -> Result<()> {
     ensure_parent_dir(&screenshot_path)?;
     ensure_parent_dir(&gif_path)?;
 
-    let screenshot_geometry = TerminalGeometry {
-        cols: 72,
-        rows: 30,
-        pixel_width: 640,
-        pixel_height: 480,
+    let screenshot_geometry = RenderSize {
+        width: 640,
+        height: 480,
     };
-    let gif_geometry = TerminalGeometry {
-        cols: 72,
-        rows: 30,
-        pixel_width: 640,
-        pixel_height: 480,
+    let gif_geometry = RenderSize {
+        width: 640,
+        height: 480,
     };
     let mut screenshot_renderer = Renderer::new(screenshot_geometry);
     let mut game = Game::with_seed(0xBADD1E);
@@ -513,7 +508,7 @@ struct RgbaImage {
 impl RgbaImage {
     fn new(width: u32, height: u32, color: [u8; 4]) -> Self {
         let mut pixels = vec![0; (width * height * 4) as usize];
-        for chunk in pixels.chunks_exact_mut(4) {
+        for chunk in pixels.as_chunks_mut::<4>().0 {
             chunk.copy_from_slice(&color);
         }
 
