@@ -2,7 +2,11 @@
 
 ## Problem
 
-The application renders through Kitty and reads terminal keyboard events. The Homebrew tap pins the Kitty-based v1.0.0 release, so installing that formula cannot deliver the requested native wgpu port.
+Before this change, the application rendered through Kitty and read terminal keyboard events. The Homebrew tap pinned the Kitty-based v1.0.0 release, so installing that formula could not deliver the requested native wgpu port.
+
+## Resolution
+
+The application now presents through wgpu. The published Homebrew formula pins port commit `457237526a80061a9469f227b98cad090616c44d` with revision 1; a source installation, installed help/version tests, and linkage checks passed on macOS.
 
 ## Expected result
 

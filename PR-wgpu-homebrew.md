@@ -10,8 +10,8 @@ Use winit lifecycle and held keyboard controls with fixed game steps, clear inpu
 
 ## Validation
 
-make ci passes: 74 tests, formatting, and warnings-as-errors Clippy. Markdown lint passes with MD013 disabled to retain single-line prose. Live macOS smoke testing visibly confirmed attract rendering, Enter starting gameplay, rendering after window zoom, and Escape terminating the process. The companion tap change tests the installed help/version commands.
+make ci passes: 74 tests, formatting, and warnings-as-errors Clippy. Markdown lint passes with MD013 disabled to retain single-line prose. Live macOS smoke testing visibly confirmed attract rendering, Enter starting gameplay, rendering after window zoom, and Escape terminating the process. The companion tap change passed a real macOS source installation, installed help/version tests, formula style, strict online audit, and linkage checks.
 
 ## Compatibility and remaining risks
 
-Interactive play now needs a graphical desktop and compatible GPU. Linux and Windows runtime validation remains outstanding. GPU/window lifecycle is validated by the live smoke test rather than unit coverage; no coverage percentage is claimed. CPU rasterization remains capped at 960 x 720. Checked-in media predates the window port. Two existing Clippy style findings were corrected to pass the normal checks.
+Interactive play now needs a graphical desktop and compatible GPU. Linux and Windows runtime validation remains outstanding. GPU/window lifecycle is validated by the live smoke test rather than unit coverage; no coverage percentage is claimed. CPU rasterization remains capped at 960 x 720. Documentation media has since been regenerated from current game frames without terminal branding. Two existing Clippy style findings were corrected to pass the normal checks.
