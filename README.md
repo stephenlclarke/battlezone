@@ -56,17 +56,53 @@ Run `cargo run` or `make run` to open the Battlezone window. A graphical desktop
 
 ### Download a binary
 
-Download the matching archive from [GitHub Releases](https://github.com/stephenlclarke/battlezone/releases). Release v1.1.1 is the first published wgpu version. Rust, Cargo, ROMs, and external asset files are not required for these downloads.
+Download the matching archive from [release v1.1.1](https://github.com/stephenlclarke/battlezone/releases/tag/v1.1.1), using the direct links below. Release v1.1.1 is the first published wgpu version. Rust, Cargo, ROMs, and external asset files are not required for these downloads.
 
 | Platform | Release asset |
 | --- | --- |
-| macOS on Apple silicon (ARM64) | `battlezone-v1.1.1-aarch64-apple-darwin.tar.gz` |
-| Windows on Intel/AMD (x86-64, 64-bit) | `battlezone-v1.1.1-x86_64-pc-windows-msvc.zip` |
-| SHA-256 checksums | `battlezone-v1.1.1-SHA256SUMS.txt` |
+| macOS on Apple silicon (ARM64) | [battlezone-v1.1.1-aarch64-apple-darwin.tar.gz](https://github.com/stephenlclarke/battlezone/releases/download/v1.1.1/battlezone-v1.1.1-aarch64-apple-darwin.tar.gz) |
+| Windows on Intel/AMD (x86-64, 64-bit) | [battlezone-v1.1.1-x86_64-pc-windows-msvc.zip](https://github.com/stephenlclarke/battlezone/releases/download/v1.1.1/battlezone-v1.1.1-x86_64-pc-windows-msvc.zip) |
+| SHA-256 checksums | [battlezone-v1.1.1-SHA256SUMS.txt](https://github.com/stephenlclarke/battlezone/releases/download/v1.1.1/battlezone-v1.1.1-SHA256SUMS.txt) |
 
-On macOS, extract the archive and run `./battlezone` in Terminal from the extracted directory. On Windows, use **Extract All**, then run `battlezone.exe`; from PowerShell in that directory use `.\battlezone.exe`. Both archives include this README and the release guide. The Mac download is an executable, not an app bundle. Releases are not Developer ID notarized or Windows Authenticode signed.
+Download the archive and checksum manifest to the same folder. Before extracting, compute the archive's SHA-256 hash using the command below and compare it with the matching filename in the manifest.
 
-Download the checksum manifest from the same release. On macOS, compare `shasum -a 256 <archive>` with its entry in the manifest. On Windows, use `Get-FileHash .\battlezone-v1.1.1-x86_64-pc-windows-msvc.zip -Algorithm SHA256` in PowerShell.
+#### macOS ARM64
+
+In Terminal, open the folder containing your download and run:
+
+```sh
+shasum -a 256 battlezone-v1.1.1-aarch64-apple-darwin.tar.gz
+```
+
+After the hash matches, extract and launch:
+
+```sh
+tar -xzf battlezone-v1.1.1-aarch64-apple-darwin.tar.gz
+./battlezone --version
+./battlezone
+```
+
+The version command should print `battlezone 1.1.1`. The Mac download is an executable, not an app bundle.
+
+#### Windows x86-64
+
+In PowerShell, open the folder containing your download and run:
+
+```powershell
+Get-FileHash .\battlezone-v1.1.1-x86_64-pc-windows-msvc.zip -Algorithm SHA256
+```
+
+After the hash matches, extract and launch:
+
+```powershell
+Expand-Archive .\battlezone-v1.1.1-x86_64-pc-windows-msvc.zip -DestinationPath .\battlezone-v1.1.1
+.\battlezone-v1.1.1\battlezone.exe --version
+.\battlezone-v1.1.1\battlezone.exe
+```
+
+The version command should print `battlezone 1.1.1`. You can also use Explorer's **Extract All** and run `battlezone.exe` from the extracted folder.
+
+Both archives include this README and the release guide. Releases are not Developer ID notarized or Windows Authenticode signed.
 
 A graphical desktop, compatible GPU, and installed graphics driver are required for interactive play. Windows means x86-64 here; 32-bit Windows and Windows ARM64 binaries are not published. Linux remains available from source or Homebrew.
 

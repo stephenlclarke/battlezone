@@ -25,3 +25,9 @@ Integrate the newer main-branch vector renderer rather than release the older de
 ## Windows validation follow-up
 
 The first Windows run crashed with an access violation while runtime tests opened real audio devices concurrently. Inject AudioManager into RuntimeWorker so production opens one device on its worker thread and unit tests use the existing silent backend. Keep the actual audio-device smoke test separate. Tag v1.1.0 was not published because the Windows tests failed; the corrected source uses a new v1.1.1 tag. SonarCloud separately rejects the repository token with HTTP 403.
+
+## Published downloads and documentation
+
+Release v1.1.1 is published with both native archives and the checksum manifest. Native build/test/archive checks passed on macOS ARM64 and Windows x86-64. Both downloaded hashes and executable architectures were checked; the downloaded Mac executable reports version 1.1.1.
+
+README.md and RELEASING.md link directly to the published assets. The README gives checksum, extraction, and launch commands for Terminal and PowerShell. The GitHub Release page carries the same download instructions while the default-branch PR awaits review.

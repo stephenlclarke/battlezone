@@ -6,6 +6,14 @@ The earlier v1.1.0 tag failed Windows test validation and did not publish a GitH
 
 ## Published downloads
 
+The current published release is [v1.1.1](https://github.com/stephenlclarke/battlezone/releases/tag/v1.1.1):
+
+- [macOS ARM64 archive](https://github.com/stephenlclarke/battlezone/releases/download/v1.1.1/battlezone-v1.1.1-aarch64-apple-darwin.tar.gz)
+- [Windows x86-64 archive](https://github.com/stephenlclarke/battlezone/releases/download/v1.1.1/battlezone-v1.1.1-x86_64-pc-windows-msvc.zip)
+- [SHA-256 checksum manifest](https://github.com/stephenlclarke/battlezone/releases/download/v1.1.1/battlezone-v1.1.1-SHA256SUMS.txt)
+
+See the [download and launch instructions](README.md#download-a-binary) for checksum verification, extraction, and the expected `battlezone 1.1.1` version output.
+
 | Runner | Rust target | Asset |
 | --- | --- | --- |
 | macos-15 (ARM64) | aarch64-apple-darwin | battlezone-vX.Y.Z-aarch64-apple-darwin.tar.gz |
