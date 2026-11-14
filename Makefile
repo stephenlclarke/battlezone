@@ -1,4 +1,4 @@
-.PHONY: fmt test clippy ci coverage sq sq-ci sonar readme-media run
+.PHONY: fmt test clippy ci coverage sq sq-ci sonar readme-media run workflows
 
 SONAR_SCANNER ?= sonar-scanner
 SONAR_ARGS ?= -Dsonar.qualitygate.wait=true
@@ -47,3 +47,6 @@ readme-media:
 
 run:
 	cargo run
+
+workflows:
+	actionlint .github/workflows/*.yml

@@ -1,7 +1,16 @@
 //! Owns the Battlezone game state, arcade rules, attract mode, and frame generation.
 
-use std::f32::consts::{PI, TAU};
+#[cfg(test)]
+use std::path::PathBuf;
+use std::{
+    f32::consts::{PI, TAU},
+    io,
+};
 
+use anyhow::Result;
+
+#[cfg(test)]
+use crate::high_scores::save as save_high_scores_to_path;
 use crate::{
     arcade::{self, ArcadeTables, ObstacleKind},
     attract::{self, TextSize},
@@ -550,6 +559,25 @@ struct InitialsEntry {
     score: u32,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum HighScoreStorage {
+    Disabled,
+    DefaultPath,
+    #[cfg(test)]
+    Path(PathBuf),
+}
+
+impl HighScoreStorage {
+    fn save(&self, entries: &[HighScoreEntry]) -> io::Result<()> {
+        match self {
+            Self::Disabled => Ok(()),
+            Self::DefaultPath => save_high_scores(entries),
+            #[cfg(test)]
+            Self::Path(path) => save_high_scores_to_path(path, entries),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct EasterEggState {
     active: bool,
@@ -582,7 +610,8 @@ pub struct Game {
     next_bonus_tank_index: usize,
     missile_launch_counter: u8,
     high_scores: Vec<HighScoreEntry>,
-    persist_high_scores: bool,
+    high_score_storage: HighScoreStorage,
+    persistence_warning: Option<String>,
     enemy: Option<Enemy>,
     player_projectiles: Vec<Projectile>,
     player_shot_cooldown: f32,
@@ -613,23 +642,43 @@ impl Default for Game {
 
 impl Game {
     pub fn new() -> Self {
-        Self::with_seed_and_high_scores(fastrand::u64(..), default_high_scores(), false)
+        Self::try_new().expect("default Battlezone game should initialize")
     }
 
-    pub fn load() -> Self {
-        Self::with_seed_and_high_scores(fastrand::u64(..), load_high_scores(), true)
+    pub fn try_new() -> Result<Self> {
+        Self::with_seed_high_scores_and_storage(
+            fastrand::u64(..),
+            default_high_scores(),
+            HighScoreStorage::Disabled,
+        )
+    }
+
+    pub fn load() -> Result<Self> {
+        Self::with_seed_high_scores_and_storage(
+            fastrand::u64(..),
+            load_high_scores(),
+            HighScoreStorage::DefaultPath,
+        )
     }
 
     pub fn with_seed(seed: u64) -> Self {
-        Self::with_seed_and_high_scores(seed, default_high_scores(), false)
+        Self::try_with_seed(seed).expect("seeded Battlezone game should initialize")
     }
 
-    fn with_seed_and_high_scores(
+    pub fn try_with_seed(seed: u64) -> Result<Self> {
+        Self::with_seed_high_scores_and_storage(
+            seed,
+            default_high_scores(),
+            HighScoreStorage::Disabled,
+        )
+    }
+
+    fn with_seed_high_scores_and_storage(
         seed: u64,
         high_scores: Vec<HighScoreEntry>,
-        persist_high_scores: bool,
-    ) -> Self {
-        let arcade = arcade::arcade_tables();
+        high_score_storage: HighScoreStorage,
+    ) -> Result<Self> {
+        let arcade = arcade::try_arcade_tables()?;
         let mut game = Self {
             arcade,
             rng: fastrand::Rng::with_seed(seed),
@@ -647,7 +696,8 @@ impl Game {
             next_bonus_tank_index: 0,
             missile_launch_counter: u8::MAX,
             high_scores,
-            persist_high_scores,
+            high_score_storage,
+            persistence_warning: None,
             enemy: None,
             player_projectiles: Vec::new(),
             player_shot_cooldown: 0.0,
@@ -676,7 +726,7 @@ impl Game {
             events: vec![GameEvent::TitleScreenEntered],
         };
         game.reset_title_world();
-        game
+        Ok(game)
     }
 
     pub fn set_viewport(&mut self, width: u32, height: u32) {
@@ -1068,7 +1118,7 @@ impl Game {
     }
 
     fn missile_sway(&self) -> f32 {
-        if self.score >= arcade::missile_nastier_threshold() {
+        if self.score >= arcade::missile_nastier_threshold_for(self.arcade) {
             (self.title_timer * 9.0).sin() * 0.12
         } else {
             (self.title_timer * 7.0).sin() * 0.38
@@ -1298,6 +1348,7 @@ impl Game {
         self.player.spawn_grace_timer = PLAYER_RESPAWN_DELAY;
         self.saucer.state = SaucerState::Inactive;
         self.saucer.timer = self.random_saucer_respawn_delay();
+        self.persistence_warning = None;
         self.spawn_enemy(Some(EnemyKind::SlowTank));
         self.events.push(GameEvent::GameStarted);
     }
@@ -1356,8 +1407,10 @@ impl Game {
         };
         let initials = String::from_utf8(entry.letters.to_vec()).expect("letters should be ASCII");
         insert_entry(&mut self.high_scores, &initials, entry.score);
-        if self.persist_high_scores {
-            let _ = save_high_scores(&self.high_scores);
+        if let Err(error) = self.high_score_storage.save(&self.high_scores) {
+            self.persistence_warning = Some(format!("HIGH SCORE NOT SAVED: {error}"));
+        } else {
+            self.persistence_warning = None;
         }
         self.enter_title_mode();
     }
@@ -1997,10 +2050,11 @@ impl Game {
         self.push_arcade_text(
             &mut scene,
             attract::BONUS_TANK_LABEL.position,
-            arcade::bonus_tank_label(),
+            self.bonus_tank_label(),
             attract::BONUS_TANK_LABEL.size,
             SCREEN_COLOR,
         );
+        self.add_persistence_warning(&mut scene);
         scene
     }
 
@@ -2016,10 +2070,11 @@ impl Game {
         self.push_arcade_text(
             &mut scene,
             self.high_score_bonus_label_position(),
-            arcade::bonus_tank_label(),
+            self.bonus_tank_label(),
             attract::BONUS_TANK_LABEL.size,
             SCREEN_COLOR,
         );
+        self.add_persistence_warning(&mut scene);
         scene
     }
 
@@ -2171,6 +2226,24 @@ impl Game {
             attract::BONUS_TANK_LABEL.position.0,
             (last_row_y - 64).min(attract::BONUS_TANK_LABEL.position.1),
         )
+    }
+
+    fn bonus_tank_label(&self) -> String {
+        arcade::bonus_tank_label_for(self.arcade)
+    }
+
+    fn add_persistence_warning(&self, scene: &mut Scene) {
+        if self.persistence_warning.is_none() {
+            return;
+        }
+
+        self.push_arcade_text(
+            scene,
+            (-224, -184),
+            "HIGH SCORE NOT SAVED",
+            TextSize::Half,
+            WARNING_COLOR,
+        );
     }
 
     fn add_title_logo(&self, scene: &mut Scene) {
@@ -2919,12 +2992,44 @@ fn clamp_to_world(position: Vec3) -> Vec3 {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
     use super::{
-        EnemyKind, Game, GameEvent, PlayerState, Projectile, ProjectileOwner, SaucerState,
-        TextSize, enemy_radius, tank_kind,
+        EnemyKind, Game, GameEvent, HighScoreStorage, PlayerState, Projectile, ProjectileOwner,
+        SaucerState, TextSize, enemy_radius, tank_kind,
     };
+    use crate::high_scores::default_high_scores;
     use crate::input::UpdateInput;
     use crate::math::Vec3;
+
+    static NEXT_DIR_ID: AtomicUsize = AtomicUsize::new(0);
+
+    struct TempDir {
+        path: PathBuf,
+    }
+
+    impl TempDir {
+        fn new() -> Self {
+            let path = std::env::temp_dir().join(format!(
+                "battlezone-game-test-{}-{}",
+                std::process::id(),
+                NEXT_DIR_ID.fetch_add(1, Ordering::Relaxed)
+            ));
+            std::fs::create_dir_all(&path).expect("create temp dir");
+            Self { path }
+        }
+
+        fn path(&self) -> &PathBuf {
+            &self.path
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.path);
+        }
+    }
 
     fn test_enemy(kind: EnemyKind, position: Vec3) -> super::Enemy {
         super::Enemy {
@@ -3092,6 +3197,26 @@ mod tests {
         assert_eq!(game.high_scores[0].initials, "BBB");
         assert_eq!(game.high_scores[0].score, 130_000);
         assert!(overlay_contains(&game, "PRESS START"));
+    }
+
+    #[test]
+    fn failed_high_score_save_is_visible_after_initials_entry() {
+        let temp_dir = TempDir::new();
+        let save_path = temp_dir.path().join("scores-as-directory");
+        std::fs::create_dir_all(&save_path).expect("create unwritable score path");
+        let mut game = Game::with_seed_high_scores_and_storage(
+            5,
+            default_high_scores(),
+            HighScoreStorage::Path(save_path),
+        )
+        .expect("create game with custom high-score storage");
+        game.score = 130_000;
+
+        game.begin_initials_entry();
+        game.commit_initials();
+
+        assert!(matches!(game.mode, super::Mode::Title));
+        assert!(overlay_contains(&game, "HIGH SCORE NOT SAVED"));
     }
 
     #[test]

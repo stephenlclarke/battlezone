@@ -6,10 +6,12 @@ use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
+use anyhow::{Context, Result, anyhow};
+
 const DATA_DIR_ENV: &str = "BATTLEZONE_DATA_DIR";
 const REPO_NAME: &str = "battlezone";
 
-pub fn load_arcade_text(file_name: &str, default_text: &str) -> String {
+pub fn load_arcade_text(file_name: &str, default_text: &str) -> Result<String> {
     load_arcade_text_from_dir(&data_dir(), file_name, default_text)
 }
 
@@ -25,21 +27,18 @@ fn data_dir() -> PathBuf {
     PathBuf::from(".xyzzy").join(REPO_NAME)
 }
 
-fn load_arcade_text_from_dir(dir: &Path, file_name: &str, default_text: &str) -> String {
+fn load_arcade_text_from_dir(dir: &Path, file_name: &str, default_text: &str) -> Result<String> {
     let override_path = dir.join(file_name);
     let override_text = match fs::read_to_string(&override_path) {
         Ok(text) => text,
-        Err(error) if error.kind() == ErrorKind::NotFound => return default_text.to_string(),
-        Err(error) => panic!(
-            "failed to read override file {}: {error}",
-            override_path.display()
-        ),
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(default_text.to_string()),
+        Err(error) => return Err(error).context(format!("reading {}", override_path.display())),
     };
 
     if is_key_value_text(default_text) {
         merge_key_value_text(default_text, &override_text)
     } else {
-        override_text
+        Ok(override_text)
     }
 }
 
@@ -50,8 +49,8 @@ fn is_key_value_text(text: &str) -> bool {
         .all(|line| line.contains('='))
 }
 
-fn merge_key_value_text(default_text: &str, override_text: &str) -> String {
-    let mut overrides = parse_key_value_lines(override_text);
+fn merge_key_value_text(default_text: &str, override_text: &str) -> Result<String> {
+    let mut overrides = parse_key_value_lines(override_text)?;
     let mut merged_lines = Vec::new();
 
     for line in default_text.lines() {
@@ -61,7 +60,7 @@ fn merge_key_value_text(default_text: &str, override_text: &str) -> String {
             continue;
         }
 
-        let (key, _) = parse_key_value_line(trimmed);
+        let (key, _) = parse_key_value_line(trimmed)?;
         if let Some(value) = overrides.remove(key) {
             merged_lines.push(format!("{key}={value}"));
         } else {
@@ -73,10 +72,10 @@ fn merge_key_value_text(default_text: &str, override_text: &str) -> String {
         merged_lines.push(format!("{key}={value}"));
     }
 
-    format!("{}\n", merged_lines.join("\n"))
+    Ok(format!("{}\n", merged_lines.join("\n")))
 }
 
-fn parse_key_value_lines(text: &str) -> BTreeMap<String, String> {
+fn parse_key_value_lines(text: &str) -> Result<BTreeMap<String, String>> {
     let mut values = BTreeMap::new();
 
     for line in text.lines().map(str::trim) {
@@ -84,18 +83,18 @@ fn parse_key_value_lines(text: &str) -> BTreeMap<String, String> {
             continue;
         }
 
-        let (key, value) = parse_key_value_line(line);
+        let (key, value) = parse_key_value_line(line)?;
         values.insert(key.to_string(), value.to_string());
     }
 
-    values
+    Ok(values)
 }
 
-fn parse_key_value_line(line: &str) -> (&str, &str) {
+fn parse_key_value_line(line: &str) -> Result<(&str, &str)> {
     let (key, value) = line
         .split_once('=')
-        .expect("customization lines should use key=value");
-    (key.trim(), value.trim())
+        .ok_or_else(|| anyhow!("customization lines should use key=value: {line}"))?;
+    Ok((key.trim(), value.trim()))
 }
 
 #[cfg(test)]
@@ -139,11 +138,20 @@ mod tests {
         let merged = merge_key_value_text(
             "starting_lives=3\nmissile_score_threshold=10000\nsaucer_score_threshold=2000\n",
             "starting_lives=5\n",
-        );
+        )
+        .expect("merge override");
 
         assert!(merged.contains("starting_lives=5"));
         assert!(merged.contains("missile_score_threshold=10000"));
         assert!(merged.contains("saucer_score_threshold=2000"));
+    }
+
+    #[test]
+    fn malformed_key_value_override_returns_error() {
+        let error = merge_key_value_text("starting_lives=3\n", "starting_lives 5\n")
+            .expect_err("malformed override should fail");
+
+        assert!(error.to_string().contains("key=value"));
     }
 
     #[test]
@@ -159,7 +167,8 @@ mod tests {
             temp_dir.path(),
             "battlefield.txt",
             "wide_pyramid 32.0 32.0 0.0 4.0\n",
-        );
+        )
+        .expect("load battlefield override");
 
         assert_eq!(loaded, "wide_pyramid 0.0 0.0 0.0 4.0\n");
     }

@@ -13,6 +13,12 @@
 [![Vulnerabilities](https://sonarcloud.io/api/project_badges/measure?project=stephenlclarke_battlezone&metric=vulnerabilities)](https://sonarcloud.io/summary/new_code?id=stephenlclarke_battlezone)
 ![Repo Visitors](https://visitor-badge.laobi.icu/badge?page_id=stephenlclarke.battlezone)
 
+<!-- markdownlint-disable MD033 -->
+<p align="center">
+<a href="https://www.buymeacoffee.com/xyzzy.tools"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee" height="40"></a>
+</p>
+<!-- markdownlint-enable MD033 -->
+
 ---
 
 This is a self-contained Rust implementation of Atari's original Battlezone, rendered in a native window through wgpu.
@@ -42,10 +48,29 @@ Run targets:
 - `make sq-ci`
 - `make sq`
 - `make readme-media`
+- `make workflows`
 
 Run `cargo run` or `make run` to open the Battlezone window. A graphical desktop and a wgpu-compatible GPU are required.
 
 ## Install
+
+### Download a binary
+
+Download the matching archive from [GitHub Releases](https://github.com/stephenlclarke/battlezone/releases). Release v1.1.0 is the first tagged wgpu version. Rust, Cargo, ROMs, and external asset files are not required for these downloads.
+
+| Platform | Release asset |
+| --- | --- |
+| macOS on Apple silicon (ARM64) | `battlezone-v1.1.0-aarch64-apple-darwin.tar.gz` |
+| Windows on Intel/AMD (x86-64, 64-bit) | `battlezone-v1.1.0-x86_64-pc-windows-msvc.zip` |
+| SHA-256 checksums | `battlezone-v1.1.0-SHA256SUMS.txt` |
+
+On macOS, extract the archive and run `./battlezone` in Terminal from the extracted directory. On Windows, use **Extract All**, then run `battlezone.exe`; from PowerShell in that directory use `.\battlezone.exe`. Both archives include this README and the release guide. The Mac download is an executable, not an app bundle. Releases are not Developer ID notarized or Windows Authenticode signed.
+
+Download the checksum manifest from the same release. On macOS, compare `shasum -a 256 <archive>` with its entry in the manifest. On Windows, use `Get-FileHash .\battlezone-v1.1.0-x86_64-pc-windows-msvc.zip -Algorithm SHA256` in PowerShell.
+
+A graphical desktop, compatible GPU, and installed graphics driver are required for interactive play. Windows means x86-64 here; 32-bit Windows and Windows ARM64 binaries are not published. Linux remains available from source or Homebrew.
+
+### Homebrew
 
 Install with Homebrew:
 
@@ -65,7 +90,7 @@ Alternatively, install directly from git with Cargo:
 cargo install --locked --git https://github.com/stephenlclarke/battlezone --branch develop battlezone
 ```
 
-The Homebrew stable formula installs the checksum-verified wgpu source at commit `457237526a80061a9469f227b98cad090616c44d` as `1.0.0_1`. Both Cargo above and `brew install --HEAD stephenlclarke/tap/battlezone` follow `develop` rather than a release tag. The application reports upstream version `1.0.0`; use `brew list --versions battlezone` to see the Homebrew revision.
+The Homebrew stable formula installs the checksum-verified wgpu source at commit `457237526a80061a9469f227b98cad090616c44d` as `1.0.0_1`. Both Cargo above and `brew install --HEAD stephenlclarke/tap/battlezone` follow `develop` rather than a release tag. That pinned Homebrew build reports `1.0.0`; current source and the new release report `1.1.0`. Use `brew list --versions battlezone` to see the Homebrew revision. The tap is maintained separately and does not automatically change when a release tag is pushed.
 
 `cargo install` builds with Cargo's release profile by default. Do not pass `--debug` unless you explicitly want a slower debug build.
 
@@ -85,7 +110,11 @@ Rust and Cargo are required. On Debian/Ubuntu, install `libasound2-dev` before b
 
 ### Release binaries
 
-The tag-triggered release workflow builds Linux x86_64/arm64, Windows x86_64, and macOS arm64 binaries and publishes a `battlezone-<tag>-SHA256SUMS.txt` manifest. The `v1.0.0` release predates this wgpu port and uses Kitty graphics. For the native window version, use the pinned Homebrew formula or the `develop` source commands above until a new wgpu release is tagged.
+The [Release workflow](.github/workflows/release.yml) builds the tagged source on native macOS ARM64 and Windows x86-64 runners. It runs tests, builds with `--locked --release`, checks that `--version` matches the tag and `--help` identifies wgpu, and checks each extracted archive before publishing. Both platform builds must pass before either download is published. GitHub Releases contains the two archives and a `battlezone-<tag>-SHA256SUMS.txt` manifest; Actions artifacts are intermediate build outputs.
+
+Version `v1.0.0` is the historical Kitty release. Use `v1.1.0` or later for native window play. New releases publish only the two platforms listed above; the old release's Linux binaries remain historical downloads.
+
+For maintainer steps and rerunning an existing tag, see [RELEASING.md](RELEASING.md).
 
 ### Command-line options
 
@@ -146,6 +175,7 @@ Extra keys while `xyzzy` mode is active:
 - High scores now persist between runs in
   `~/.xyzzy/battlezone/high_scores.txt`; set `BATTLEZONE_DATA_DIR` to redirect
   that file for local experiments or tests.
+- If `HOME` is unset, scores and overrides fall back to `.xyzzy/battlezone/` under the working directory. On Windows, set `BATTLEZONE_DATA_DIR` to a writable directory if you want the same save location regardless of where the game is launched.
 - If no audio output device is available, play continues silently.
 
 ## SonarQube
@@ -233,9 +263,9 @@ This file is a whole-layout override rather than a partial key/value merge. If `
 
 ## Platform Support
 
-macOS is the primary development platform. The native window uses winit and wgpu, following the Defender port, with Metal on macOS and the available wgpu backends elsewhere. Linux and Windows still need broader real-world validation.
+macOS ARM64 and Windows x86-64 are the release targets. The native window uses winit and wgpu, following the Defender port, with Metal on macOS and available wgpu backends on Windows. CI tests both platforms and Linux. Linux is supported as a source build; native Windows graphical play and Linux graphical play still need broader real-world validation.
 
-The existing CPU renderer produces RGBA frames, which wgpu uploads to a reusable texture and presents without PNG encoding or terminal escape sequences. Window resizing updates the game viewport; raster resolution remains capped at 960 x 720.
+Interactive play builds vector meshes for world lines, dots, overlay text, and backgrounds and draws them directly through wgpu to the native window surface. Resizing updates the viewport and GPU surface. The separate CPU raster renderer is used only for headless documentation media and tests.
 
 For automated docs media generation or headless regression work, use the examples under `examples/`. The checked-in PNG and GIF are generated gameplay frames from the current renderer, without terminal branding or simulated window chrome. They illustrate game content rather than the operating system window.
 
@@ -249,7 +279,7 @@ For automated docs media generation or headless regression work, use the example
 
 ## Development and documentation media
 
-Run `make ci` for formatting, all-target tests, and warnings-as-errors Clippy. Tests and media generation use the CPU renderer and do not need an interactive window. Confirm native presentation separately in a live graphical session: check attract rendering, Enter starting gameplay, held controls and releases, resizing, focus changes, and Escape or window-close exit.
+Run `make ci` for formatting, all-target tests, and warnings-as-errors Clippy. Run `make workflows` to lint GitHub Actions with `actionlint` installed. Tests and media generation use the CPU renderer and do not need an interactive window. Confirm native presentation separately in a live graphical session: check attract rendering, Enter starting gameplay, held controls and releases, resizing, focus changes, and Escape or window-close exit.
 
 Run `make readme-media` to regenerate `docs/battlezone.png` and `docs/start-sequence.gif` from the maintained example. The generator uses a fixed seed and captures game frames directly; it does not record a desktop window. To choose output paths:
 
@@ -257,4 +287,4 @@ Run `make readme-media` to regenerate `docs/battlezone.png` and `docs/start-sequ
 cargo run --example generate_readme_media -- /tmp/battlezone.png /tmp/start-sequence.gif
 ```
 
-For Markdown validation, run `markdownlint --disable MD013 -- README.md AGENTS.md ISSUE-*.md PR-*.md assets/sounds/README.md`; MD013 is disabled to preserve single-line prose.
+For Markdown validation, run `markdownlint --disable MD013 -- README.md AGENTS.md ISSUE-*.md PR-*.md assets/sounds/README.md RELEASING.md`; MD013 is disabled to preserve single-line prose.

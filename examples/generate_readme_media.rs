@@ -10,7 +10,7 @@ use battlezone::{
     arcade::ORIGINAL_FRAME_TIME,
     game::Game,
     input::UpdateInput,
-    render::{RenderSize, RenderedImage, Renderer},
+    render::{RenderedImage, Renderer, ViewportSize},
 };
 use gif::{Encoder, Frame, Repeat};
 use png::{BitDepth, ColorType, Compression, Encoder as PngEncoder};
@@ -37,15 +37,9 @@ fn main() -> Result<()> {
     ensure_parent_dir(&screenshot_path)?;
     ensure_parent_dir(&gif_path)?;
 
-    let screenshot_geometry = RenderSize {
-        width: 640,
-        height: 480,
-    };
-    let gif_geometry = RenderSize {
-        width: 640,
-        height: 480,
-    };
-    let mut screenshot_renderer = Renderer::new(screenshot_geometry);
+    let screenshot_size = ViewportSize::new(640, 480);
+    let gif_size = ViewportSize::new(640, 480);
+    let mut screenshot_renderer = Renderer::new(screenshot_size);
     let mut game = Game::with_seed(0xBADD1E);
     game.set_viewport(
         screenshot_renderer.image_width(),
@@ -55,7 +49,7 @@ fn main() -> Result<()> {
     let screenshot = capture_gameplay_screenshot(&mut game, &mut screenshot_renderer);
     write_png(&screenshot_path, &screenshot)?;
 
-    let mut gif_renderer = Renderer::new(gif_geometry);
+    let mut gif_renderer = Renderer::new(gif_size);
     let mut game = Game::with_seed(0xBADD1E);
     game.set_viewport(gif_renderer.image_width(), gif_renderer.image_height());
     write_showcase_gif(&gif_path, &mut game, &mut gif_renderer)?;

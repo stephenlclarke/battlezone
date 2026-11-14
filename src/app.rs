@@ -1,212 +1,319 @@
-//! Native window lifecycle, fixed-timestep game updates, and GPU presentation.
-use crate::{
-    arcade::ORIGINAL_FRAME_TIME,
-    audio::AudioManager,
-    constants::MAX_DT,
-    game::Game,
-    graphics::Graphics,
-    input::InputTracker,
-    render::{RenderSize, Renderer},
-};
+//! Runs the windowed application loop and presents frames from the game thread.
+
+use std::sync::Arc;
+
 use anyhow::{Context, Result};
-use std::{
-    sync::Arc,
-    time::{Duration, Instant},
-};
 use winit::{
     application::ApplicationHandler,
-    event::{ElementState, WindowEvent},
-    event_loop::{ActiveEventLoop, ControlFlow, EventLoop},
-    keyboard::PhysicalKey,
+    dpi::{LogicalSize, PhysicalSize},
+    event::{ElementState, KeyEvent, WindowEvent},
+    event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy},
+    keyboard::{Key, NamedKey},
     window::{Window, WindowId},
 };
 
+use crate::{
+    gpu::GpuPresenter,
+    input::{InputEvent, InputKey, InputPhase},
+    render::{Scene, ViewportSize},
+    runtime::{GameRuntime, RuntimeEvent},
+};
+
+const WINDOW_TITLE: &str = "Battlezone";
+const INITIAL_WINDOW_WIDTH: f64 = 960.0;
+const INITIAL_WINDOW_HEIGHT: f64 = 720.0;
+const MIN_WINDOW_WIDTH: f64 = 320.0;
+const MIN_WINDOW_HEIGHT: f64 = 180.0;
+
 pub fn run() -> Result<()> {
-    let event_loop = EventLoop::new().context("creating window event loop")?;
-    let mut app = App::new();
+    let event_loop = EventLoop::<RuntimeEvent>::with_user_event()
+        .build()
+        .context("creating Battlezone event loop")?;
+    event_loop.set_control_flow(ControlFlow::Wait);
+
+    let event_proxy = event_loop.create_proxy();
+    let mut app = BattlezoneApp::new(event_proxy);
     event_loop
         .run_app(&mut app)
-        .context("running window event loop")?;
-    match app.error {
-        Some(error) => Err(error),
-        None => Ok(()),
-    }
+        .context("running Battlezone event loop")?;
+    app.finish()
 }
 
-struct App {
+struct BattlezoneApp {
+    event_proxy: EventLoopProxy<RuntimeEvent>,
     window: Option<Arc<Window>>,
-    graphics: Option<Graphics>,
-    renderer: Renderer,
-    game: Game,
-    audio: AudioManager,
-    input: InputTracker,
-    last_tick: Instant,
-    accumulator: f32,
+    window_id: Option<WindowId>,
+    gpu: Option<GpuPresenter>,
+    runtime: Option<GameRuntime>,
+    latest_scene: Option<Scene>,
+    redraw_requested: bool,
     error: Option<anyhow::Error>,
 }
 
-impl App {
-    fn new() -> Self {
-        let renderer = Renderer::new(RenderSize {
-            width: 960,
-            height: 720,
-        });
-        let mut game = Game::load();
-        game.set_viewport(renderer.image_width(), renderer.image_height());
+impl BattlezoneApp {
+    fn new(event_proxy: EventLoopProxy<RuntimeEvent>) -> Self {
         Self {
+            event_proxy,
             window: None,
-            graphics: None,
-            renderer,
-            game,
-            audio: AudioManager::new(),
-            input: InputTracker::default(),
-            last_tick: Instant::now(),
-            accumulator: 0.0,
+            window_id: None,
+            gpu: None,
+            runtime: None,
+            latest_scene: None,
+            redraw_requested: false,
             error: None,
         }
     }
 
-    fn fail(&mut self, event_loop: &ActiveEventLoop, error: anyhow::Error) {
-        self.error = Some(error);
-        event_loop.exit();
+    fn finish(mut self) -> Result<()> {
+        if let Some(runtime) = self.runtime.as_mut() {
+            runtime.shutdown();
+        }
+        if let Some(error) = self.error.take() {
+            Err(error)
+        } else {
+            Ok(())
+        }
     }
 
     fn initialize(&mut self, event_loop: &ActiveEventLoop) -> Result<()> {
         if self.window.is_some() {
             return Ok(());
         }
-        let window = Arc::new(
-            event_loop
-                .create_window(
-                    Window::default_attributes()
-                        .with_title("Battlezone")
-                        .with_inner_size(winit::dpi::LogicalSize::new(960.0, 720.0)),
-                )
-                .context("creating Battlezone window")?,
-        );
-        self.graphics = Some(pollster::block_on(Graphics::new(window.clone()))?);
-        self.resize(window.inner_size());
+
+        let window = Arc::new(event_loop.create_window(window_attributes())?);
+        let gpu = pollster::block_on(GpuPresenter::new(window.clone()))?;
+        let runtime = GameRuntime::spawn(viewport_for_window(&window), self.event_proxy.clone())?;
+
+        self.window_id = Some(window.id());
+        self.gpu = Some(gpu);
+        self.runtime = Some(runtime);
         self.window = Some(window);
-        self.last_tick = Instant::now();
         Ok(())
     }
 
-    fn resize(&mut self, size: winit::dpi::PhysicalSize<u32>) {
-        if let Some(graphics) = &mut self.graphics {
-            graphics.resize(size);
-        }
-        if size.width == 0 || size.height == 0 {
+    fn handle_window_event(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        window_id: WindowId,
+        event: WindowEvent,
+    ) {
+        if Some(window_id) != self.window_id {
             return;
         }
-        self.renderer.resize(RenderSize {
-            width: size.width,
-            height: size.height,
-        });
-        self.game
-            .set_viewport(self.renderer.image_width(), self.renderer.image_height());
-    }
 
-    fn update(&mut self) {
-        let now = Instant::now();
-        let dt = now.duration_since(self.last_tick).as_secs_f32().min(MAX_DT);
-        self.last_tick = now;
-        self.accumulator = (self.accumulator + dt).min(ORIGINAL_FRAME_TIME * 6.0);
-        let steps = consume_fixed_steps(&mut self.accumulator, ORIGINAL_FRAME_TIME);
-        for _ in 0..steps {
-            self.game
-                .update_with_input(ORIGINAL_FRAME_TIME, self.input.drain());
-            for event in self.game.drain_events() {
-                self.audio.handle_event(event);
-            }
-        }
-    }
-}
-
-impl ApplicationHandler for App {
-    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        if let Err(error) = self.initialize(event_loop) {
-            self.fail(event_loop, error);
-        }
-    }
-    fn window_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
-        if !self.window.as_ref().is_some_and(|window| window.id() == id) {
-            return;
-        }
         match event {
-            WindowEvent::CloseRequested => event_loop.exit(),
-            WindowEvent::Focused(false) => self.input.clear(),
-            WindowEvent::KeyboardInput { event, .. } => {
-                let pressed = event.state == ElementState::Pressed;
-                if let PhysicalKey::Code(key) = event.physical_key {
-                    if key == winit::keyboard::KeyCode::Escape && pressed {
-                        event_loop.exit();
-                    }
-                    self.input.key(key, pressed, event.repeat);
-                }
-                if pressed
-                    && !event.repeat
-                    && let Some(text) = event.text
-                {
-                    self.input.text(&text);
+            WindowEvent::CloseRequested => self.exit(event_loop),
+            WindowEvent::Resized(size) => self.resize(size),
+            WindowEvent::Focused(false) => {
+                if let Some(runtime) = &self.runtime {
+                    runtime.clear_input();
                 }
             }
-            WindowEvent::Resized(size) => self.resize(size),
-            WindowEvent::RedrawRequested => {
-                if let Some(window) = &self.window {
-                    window.pre_present_notify();
-                }
-                let image = self.renderer.render(&self.game.frame());
-                if let Some(graphics) = &mut self.graphics
-                    && let Err(error) = graphics.draw(&image)
+            WindowEvent::KeyboardInput { event, .. } => {
+                if let Some(input) = input_event_for_key_event(&event)
+                    && let Some(runtime) = &self.runtime
                 {
-                    self.fail(event_loop, error);
+                    runtime.send_input(input);
+                }
+            }
+            WindowEvent::RedrawRequested => {
+                if let Err(error) = self.draw() {
+                    self.record_error(error, event_loop);
                 }
             }
             _ => {}
         }
     }
-    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        self.update();
+
+    fn handle_runtime_event(&mut self, event_loop: &ActiveEventLoop, event: RuntimeEvent) {
+        match event {
+            RuntimeEvent::FrameReady => {
+                if self.take_latest_frame() {
+                    self.request_redraw();
+                }
+            }
+            RuntimeEvent::QuitRequested => self.exit(event_loop),
+        }
+    }
+
+    fn resize(&mut self, size: PhysicalSize<u32>) {
+        if let Some(gpu) = self.gpu.as_mut() {
+            gpu.resize(size);
+        }
+        if let Some(runtime) = &self.runtime {
+            runtime.resize(ViewportSize::new(size.width, size.height));
+        }
+        self.request_redraw();
+    }
+
+    fn draw(&mut self) -> Result<()> {
+        self.redraw_requested = false;
+        self.take_latest_frame();
+
+        let (Some(window), Some(gpu), Some(scene)) = (
+            self.window.as_ref(),
+            self.gpu.as_mut(),
+            self.latest_scene.as_ref(),
+        ) else {
+            return Ok(());
+        };
+
+        window.pre_present_notify();
+        gpu.present(scene)
+    }
+
+    fn take_latest_frame(&mut self) -> bool {
+        let Some(runtime) = &self.runtime else {
+            return false;
+        };
+        let Some(scene) = runtime.take_scene() else {
+            return false;
+        };
+        self.latest_scene = Some(scene);
+        true
+    }
+
+    fn request_redraw(&mut self) {
+        if self.redraw_requested {
+            return;
+        }
         if let Some(window) = &self.window {
             window.request_redraw();
+            self.redraw_requested = true;
         }
-        let remaining = (ORIGINAL_FRAME_TIME - self.accumulator).max(0.001);
-        event_loop.set_control_flow(ControlFlow::WaitUntil(
-            Instant::now() + Duration::from_secs_f32(remaining),
-        ));
     }
-    fn suspended(&mut self, _event_loop: &ActiveEventLoop) {
-        self.graphics = None;
-        self.window = None;
-        self.input.clear();
-        self.accumulator = 0.0;
+
+    fn exit(&mut self, event_loop: &ActiveEventLoop) {
+        if let Some(runtime) = self.runtime.as_mut() {
+            runtime.shutdown();
+        }
+        event_loop.exit();
+    }
+
+    fn record_error(&mut self, error: anyhow::Error, event_loop: &ActiveEventLoop) {
+        if self.error.is_none() {
+            self.error = Some(error);
+        }
+        self.exit(event_loop);
     }
 }
 
-fn consume_fixed_steps(accumulator: &mut f32, frame_time: f32) -> usize {
-    if frame_time <= 0.0 {
-        return 0;
+impl ApplicationHandler<RuntimeEvent> for BattlezoneApp {
+    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        if let Err(error) = self.initialize(event_loop) {
+            self.record_error(error, event_loop);
+        }
     }
-    let steps = (*accumulator / frame_time).floor() as usize;
-    *accumulator -= frame_time * steps as f32;
-    steps
+
+    fn window_event(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        window_id: WindowId,
+        event: WindowEvent,
+    ) {
+        self.handle_window_event(event_loop, window_id, event);
+    }
+
+    fn user_event(&mut self, event_loop: &ActiveEventLoop, event: RuntimeEvent) {
+        self.handle_runtime_event(event_loop, event);
+    }
 }
+
+fn window_attributes() -> winit::window::WindowAttributes {
+    Window::default_attributes()
+        .with_title(WINDOW_TITLE)
+        .with_inner_size(LogicalSize::new(
+            INITIAL_WINDOW_WIDTH,
+            INITIAL_WINDOW_HEIGHT,
+        ))
+        .with_min_inner_size(LogicalSize::new(MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT))
+}
+
+fn viewport_for_window(window: &Window) -> ViewportSize {
+    let size = window.inner_size();
+    ViewportSize::new(size.width, size.height)
+}
+
+fn input_event_for_key_event(event: &KeyEvent) -> Option<InputEvent> {
+    let key = input_key_for_winit_key(event.logical_key.as_ref())?;
+    let phase = match event.state {
+        ElementState::Pressed => InputPhase::Pressed,
+        ElementState::Released => InputPhase::Released,
+    };
+    Some(InputEvent { key, phase })
+}
+
+fn input_key_for_winit_key(key: Key<&str>) -> Option<InputKey> {
+    match key {
+        Key::Named(NamedKey::ArrowUp) => Some(InputKey::Up),
+        Key::Named(NamedKey::ArrowDown) => Some(InputKey::Down),
+        Key::Named(NamedKey::ArrowLeft) => Some(InputKey::Left),
+        Key::Named(NamedKey::ArrowRight) => Some(InputKey::Right),
+        Key::Named(NamedKey::Enter) => Some(InputKey::Enter),
+        Key::Named(NamedKey::Escape) => Some(InputKey::Escape),
+        Key::Named(NamedKey::Space) => Some(InputKey::Character(' ')),
+        Key::Character(text) => single_character_key(text).map(InputKey::Character),
+        _ => None,
+    }
+}
+
+fn single_character_key(text: &str) -> Option<char> {
+    let mut chars = text.chars();
+    let character = chars.next()?;
+    if chars.next().is_none() {
+        Some(character)
+    } else {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::consume_fixed_steps;
+    use super::{input_key_for_winit_key, single_character_key};
+    use crate::input::InputKey;
+    use winit::keyboard::{Key, NamedKey};
 
     #[test]
-    fn consume_fixed_steps_returns_whole_frame_updates() {
-        let mut accumulator = 0.19;
-        let steps = consume_fixed_steps(&mut accumulator, 0.05);
-        assert_eq!(steps, 3);
-        assert!((accumulator - 0.04).abs() < 0.0001);
+    fn single_character_key_rejects_empty_or_multi_character_text() {
+        assert_eq!(single_character_key("q"), Some('q'));
+        assert_eq!(single_character_key(""), None);
+        assert_eq!(single_character_key("xy"), None);
     }
 
     #[test]
-    fn consume_fixed_steps_ignores_non_positive_frame_time() {
-        let mut accumulator = 0.5;
-        assert_eq!(consume_fixed_steps(&mut accumulator, 0.0), 0);
-        assert_eq!(accumulator, 0.5);
+    fn winit_key_mapping_covers_game_controls() {
+        assert_eq!(
+            input_key_for_winit_key(Key::Named(NamedKey::ArrowUp)),
+            Some(InputKey::Up)
+        );
+        assert_eq!(
+            input_key_for_winit_key(Key::Named(NamedKey::ArrowDown)),
+            Some(InputKey::Down)
+        );
+        assert_eq!(
+            input_key_for_winit_key(Key::Named(NamedKey::ArrowLeft)),
+            Some(InputKey::Left)
+        );
+        assert_eq!(
+            input_key_for_winit_key(Key::Named(NamedKey::ArrowRight)),
+            Some(InputKey::Right)
+        );
+        assert_eq!(
+            input_key_for_winit_key(Key::Named(NamedKey::Enter)),
+            Some(InputKey::Enter)
+        );
+        assert_eq!(
+            input_key_for_winit_key(Key::Named(NamedKey::Escape)),
+            Some(InputKey::Escape)
+        );
+        assert_eq!(
+            input_key_for_winit_key(Key::Named(NamedKey::Space)),
+            Some(InputKey::Character(' '))
+        );
+        assert_eq!(
+            input_key_for_winit_key(Key::Character("q")),
+            Some(InputKey::Character('q'))
+        );
+        assert_eq!(input_key_for_winit_key(Key::Named(NamedKey::Tab)), None);
     }
 }

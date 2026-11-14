@@ -2,6 +2,8 @@
 
 use std::sync::OnceLock;
 
+use anyhow::{Context, Result, anyhow, bail};
+
 use crate::customization;
 
 pub const ORIGINAL_FPS: f32 = 41.666_668;
@@ -41,28 +43,47 @@ pub struct ArcadeTables {
 }
 
 pub fn arcade_tables() -> &'static ArcadeTables {
-    static TABLES: OnceLock<ArcadeTables> = OnceLock::new();
-    TABLES.get_or_init(|| {
-        let rules = customization::load_arcade_text("arcade-rules.txt", ARCADE_RULES);
-        let battlefield = customization::load_arcade_text("battlefield.txt", BATTLEFIELD_LAYOUT);
-        parse_arcade_tables(&rules, &battlefield)
-    })
+    try_arcade_tables().expect("arcade tables should load from embedded defaults")
+}
+
+pub fn try_arcade_tables() -> Result<&'static ArcadeTables> {
+    static TABLES: OnceLock<Result<ArcadeTables, String>> = OnceLock::new();
+    TABLES
+        .get_or_init(|| load_arcade_tables().map_err(|error| format!("{error:#}")))
+        .as_ref()
+        .map_err(|message| anyhow!(message.clone()))
 }
 
 pub fn bonus_tank_label() -> String {
     let tables = arcade_tables();
+    bonus_tank_label_for(tables)
+}
+
+pub fn missile_nastier_threshold() -> u32 {
+    let tables = arcade_tables();
+    missile_nastier_threshold_for(tables)
+}
+
+pub(crate) fn bonus_tank_label_for(tables: &ArcadeTables) -> String {
     format!(
         "BONUS TANK AT {} AND {}",
         tables.bonus_tank_thresholds[0], tables.bonus_tank_thresholds[1]
     )
 }
 
-pub fn missile_nastier_threshold() -> u32 {
-    let tables = arcade_tables();
+pub(crate) fn missile_nastier_threshold_for(tables: &ArcadeTables) -> u32 {
     tables.missile_score_threshold + tables.missile_nastier_delta
 }
 
-fn parse_arcade_tables(rules: &str, battlefield: &str) -> ArcadeTables {
+fn load_arcade_tables() -> Result<ArcadeTables> {
+    let rules = customization::load_arcade_text("arcade-rules.txt", ARCADE_RULES)
+        .context("loading arcade rules")?;
+    let battlefield = customization::load_arcade_text("battlefield.txt", BATTLEFIELD_LAYOUT)
+        .context("loading battlefield layout")?;
+    parse_arcade_tables(&rules, &battlefield)
+}
+
+fn parse_arcade_tables(rules: &str, battlefield: &str) -> Result<ArcadeTables> {
     let mut starting_lives = None;
     let mut missile_score_threshold = None;
     let mut missile_nastier_delta = None;
@@ -70,98 +91,132 @@ fn parse_arcade_tables(rules: &str, battlefield: &str) -> ArcadeTables {
     let mut saucer_score_threshold = None;
     let mut near_spawn_distance = None;
     let mut far_spawn_distance = None;
-    let mut strings = None;
+    let mut strings: Option<Vec<String>> = None;
 
-    for line in rules.lines().map(str::trim).filter(|line| !line.is_empty()) {
+    for (line_number, line) in rules.lines().map(str::trim).enumerate() {
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
         let (key, value) = line
             .split_once('=')
-            .expect("arcade rules should use key=value lines");
+            .ok_or_else(|| anyhow!("arcade rule line {} should use key=value", line_number + 1))?;
         match key {
-            "starting_lives" => starting_lives = Some(parse_u32(value)),
-            "missile_score_threshold" => missile_score_threshold = Some(parse_u32(value)),
-            "missile_nastier_delta" => missile_nastier_delta = Some(parse_u32(value)),
-            "bonus_tank_thresholds" => bonus_tank_thresholds = Some(parse_two_u32(value)),
-            "saucer_score_threshold" => saucer_score_threshold = Some(parse_u32(value)),
-            "near_spawn_distance" => near_spawn_distance = Some(parse_f32(value)),
-            "far_spawn_distance" => far_spawn_distance = Some(parse_f32(value)),
+            "starting_lives" => {
+                starting_lives = Some(parse_u32(value, key, line_number + 1)?);
+            }
+            "missile_score_threshold" => {
+                missile_score_threshold = Some(parse_u32(value, key, line_number + 1)?);
+            }
+            "missile_nastier_delta" => {
+                missile_nastier_delta = Some(parse_u32(value, key, line_number + 1)?);
+            }
+            "bonus_tank_thresholds" => {
+                bonus_tank_thresholds = Some(parse_two_u32(value, key, line_number + 1)?);
+            }
+            "saucer_score_threshold" => {
+                saucer_score_threshold = Some(parse_u32(value, key, line_number + 1)?);
+            }
+            "near_spawn_distance" => {
+                near_spawn_distance = Some(parse_f32(value, key, line_number + 1)?);
+            }
+            "far_spawn_distance" => {
+                far_spawn_distance = Some(parse_f32(value, key, line_number + 1)?);
+            }
             "strings" => strings = Some(value.split('|').map(ToString::to_string).collect()),
-            _ => panic!("unknown arcade rule key {key}"),
+            _ => bail!("unknown arcade rule key {key} on line {}", line_number + 1),
         }
     }
 
-    ArcadeTables {
-        starting_lives: starting_lives.expect("starting_lives should be defined"),
-        missile_score_threshold: missile_score_threshold
-            .expect("missile_score_threshold should be defined"),
-        missile_nastier_delta: missile_nastier_delta
-            .expect("missile_nastier_delta should be defined"),
-        bonus_tank_thresholds: bonus_tank_thresholds
-            .expect("bonus_tank_thresholds should be defined"),
-        saucer_score_threshold: saucer_score_threshold
-            .expect("saucer_score_threshold should be defined"),
-        near_spawn_distance: near_spawn_distance.expect("near_spawn_distance should be defined"),
-        far_spawn_distance: far_spawn_distance.expect("far_spawn_distance should be defined"),
-        strings: strings.expect("strings should be defined"),
-        obstacles: parse_battlefield(battlefield),
+    let strings = strings.ok_or_else(|| anyhow!("strings should be defined"))?;
+    if strings.len() < 11 {
+        bail!("strings should define at least 11 arcade labels");
     }
+
+    Ok(ArcadeTables {
+        starting_lives: starting_lives
+            .ok_or_else(|| anyhow!("starting_lives should be defined"))?,
+        missile_score_threshold: missile_score_threshold
+            .ok_or_else(|| anyhow!("missile_score_threshold should be defined"))?,
+        missile_nastier_delta: missile_nastier_delta
+            .ok_or_else(|| anyhow!("missile_nastier_delta should be defined"))?,
+        bonus_tank_thresholds: bonus_tank_thresholds
+            .ok_or_else(|| anyhow!("bonus_tank_thresholds should be defined"))?,
+        saucer_score_threshold: saucer_score_threshold
+            .ok_or_else(|| anyhow!("saucer_score_threshold should be defined"))?,
+        near_spawn_distance: near_spawn_distance
+            .ok_or_else(|| anyhow!("near_spawn_distance should be defined"))?,
+        far_spawn_distance: far_spawn_distance
+            .ok_or_else(|| anyhow!("far_spawn_distance should be defined"))?,
+        strings,
+        obstacles: parse_battlefield(battlefield)?,
+    })
 }
 
-fn parse_battlefield(text: &str) -> Vec<ObstacleSpec> {
+fn parse_battlefield(text: &str) -> Result<Vec<ObstacleSpec>> {
     let mut obstacles = Vec::new();
-    for line in text.lines().map(str::trim) {
+    for (line_number, line) in text.lines().map(str::trim).enumerate() {
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
 
         let parts = line.split_whitespace().collect::<Vec<_>>();
-        assert_eq!(
-            parts.len(),
-            5,
-            "battlefield rows should be: kind x z heading_deg radius"
-        );
+        if parts.len() != 5 {
+            bail!(
+                "battlefield line {} should be: kind x z heading_deg radius",
+                line_number + 1
+            );
+        }
         obstacles.push(ObstacleSpec {
-            kind: parse_obstacle_kind(parts[0]),
-            x: parse_f32(parts[1]),
-            z: parse_f32(parts[2]),
-            heading: parse_f32(parts[3]).to_radians(),
-            radius: parse_f32(parts[4]),
+            kind: parse_obstacle_kind(parts[0], line_number + 1)?,
+            x: parse_f32(parts[1], "x", line_number + 1)?,
+            z: parse_f32(parts[2], "z", line_number + 1)?,
+            heading: parse_f32(parts[3], "heading_deg", line_number + 1)?.to_radians(),
+            radius: parse_f32(parts[4], "radius", line_number + 1)?,
         });
     }
 
-    assert_eq!(
-        obstacles.len(),
-        21,
-        "battlefield should contain 21 obstacles"
-    );
-    obstacles
+    if obstacles.len() != 21 {
+        bail!("battlefield should contain 21 obstacles");
+    }
+    Ok(obstacles)
 }
 
-fn parse_obstacle_kind(value: &str) -> ObstacleKind {
-    match value {
+fn parse_obstacle_kind(value: &str, line_number: usize) -> Result<ObstacleKind> {
+    Ok(match value {
         "narrow_pyramid" => ObstacleKind::NarrowPyramid,
         "tall_box" => ObstacleKind::TallBox,
         "wide_pyramid" => ObstacleKind::WidePyramid,
         "short_box" => ObstacleKind::ShortBox,
-        _ => panic!("unknown obstacle kind {value}"),
-    }
+        _ => bail!("unknown obstacle kind {value} on battlefield line {line_number}"),
+    })
 }
 
-fn parse_u32(value: &str) -> u32 {
-    value.parse().expect("expected integer arcade value")
+fn parse_u32(value: &str, key: &str, line_number: usize) -> Result<u32> {
+    value
+        .parse()
+        .with_context(|| format!("parsing integer arcade value {key} on line {line_number}"))
 }
 
-fn parse_f32(value: &str) -> f32 {
-    value.parse().expect("expected floating-point arcade value")
+fn parse_f32(value: &str, key: &str, line_number: usize) -> Result<f32> {
+    value
+        .parse()
+        .with_context(|| format!("parsing floating-point arcade value {key} on line {line_number}"))
 }
 
-fn parse_two_u32(value: &str) -> [u32; 2] {
-    let values = value.split(',').map(parse_u32).collect::<Vec<_>>();
-    [values[0], values[1]]
+fn parse_two_u32(value: &str, key: &str, line_number: usize) -> Result<[u32; 2]> {
+    let values = value
+        .split(',')
+        .map(|part| parse_u32(part, key, line_number))
+        .collect::<Result<Vec<_>>>()?;
+    let [first, second] = values.try_into().map_err(|_| {
+        anyhow!("{key} on line {line_number} should contain exactly two integer values")
+    })?;
+    Ok([first, second])
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{arcade_tables, bonus_tank_label, missile_nastier_threshold};
+    use super::{arcade_tables, bonus_tank_label, missile_nastier_threshold, parse_arcade_tables};
 
     #[test]
     fn obstacle_tables_match_expected_layout() {
@@ -184,5 +239,12 @@ mod tests {
     fn default_labels_match_arcade_defaults() {
         assert_eq!(bonus_tank_label(), "BONUS TANK AT 15000 AND 100000");
         assert_eq!(missile_nastier_threshold(), 35_000);
+    }
+
+    #[test]
+    fn malformed_arcade_rules_return_errors() {
+        let error = parse_arcade_tables("starting_lives 3\n", "").expect_err("rules should fail");
+
+        assert!(error.to_string().contains("key=value"));
     }
 }
