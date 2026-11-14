@@ -6,7 +6,7 @@ Thank you for helping improve `battlezone`. Contributions are easiest to review 
 
 Use pull requests for all non-trivial changes.
 
-1. Create a topic branch from the default branch.
+1. Use `develop` for the current development integration, or create a topic branch from the default branch for an isolated contribution. Submit the final change through a pull request.
 2. Keep each pull request focused on one bug fix, feature, or documentation update.
 3. Use Conventional Commits for commit messages and pull request titles.
 4. Sign every commit with a GitHub-supported signature method such as SSH or GPG.
@@ -31,6 +31,12 @@ Common types include `feat`, `fix`, `docs`, `test`, `refactor`, `ci`, and `chore
 Run the repository's local validation before requesting review. Prefer the `Makefile` target when the repository provides one, because that keeps local and CI checks aligned.
 
 Every behaviour change should include an appropriate test or a clear note explaining why automated coverage is not practical. Keep changes small enough that reviewers can understand the risk.
+
+## Native runtime and releases
+
+Interactive rendering uses direct wgpu vector meshes in a winit window. Run `make ci` and `make workflows` before submitting workflow changes; the latter requires actionlint. CI tests Linux, macOS ARM64, and Windows x86-64. CLI tests run without a desktop, while rendering/input changes also need a live window smoke test.
+
+See [RELEASING.md](RELEASING.md) for version/tag checks, native build jobs, downloadable archives, and checksum verification. Release downloads target macOS ARM64 and Windows x86-64. The Homebrew tap is maintained separately.
 
 ## Protected Branch Safety
 

@@ -4,76 +4,118 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing version tag to build and publish (for example v1.1.1)"
+        required: true
+        type: string
 
 permissions:
   contents: read
 
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
 env:
   CARGO_TERM_COLOR: always
+  RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
 
 jobs:
   build:
     name: Build ${{ matrix.target }}
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
         include:
-          - runner: ubuntu-24.04
-            target: x86_64-unknown-linux-gnu
-            binary_name: battlezone
-            asset_ext: tar.gz
-          - runner: ubuntu-24.04-arm
-            target: aarch64-unknown-linux-gnu
+          - runner: macos-15
+            target: aarch64-apple-darwin
             binary_name: battlezone
             asset_ext: tar.gz
           - runner: windows-2025
             target: x86_64-pc-windows-msvc
             binary_name: battlezone.exe
-            asset_ext: exe
-          - runner: macos-15
-            target: aarch64-apple-darwin
-            binary_name: battlezone
-            asset_ext: tar.gz
+            asset_ext: zip
 
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v7
+      - name: Check out tagged source
+        uses: actions/checkout@v6
         with:
+          ref: ${{ inputs.tag || github.ref }}
           fetch-depth: 0
 
-      - name: Install Linux build dependencies
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+      - name: Verify release tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          test "$(git rev-parse HEAD)" = "$(git rev-parse "refs/tags/$RELEASE_TAG^{commit}")"
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
 
-      - name: Add target
-        run: rustup target add ${{ matrix.target }}
+      - name: Test tagged source
+        run: cargo test --locked --all-targets --target ${{ matrix.target }}
 
       - name: Build release binary
         run: cargo build --locked --release --bin battlezone --target ${{ matrix.target }}
 
+      - name: Check release executable and version
+        shell: bash
+        env:
+          RELEASE_BINARY: target/${{ matrix.target }}/release/${{ matrix.binary_name }}
+        run: |
+          set -euo pipefail
+          test "$("$RELEASE_BINARY" --version)" = "battlezone ${RELEASE_TAG#v}"
+          "$RELEASE_BINARY" --help > release-help.txt
+          grep -Fq "launches the game in a wgpu window" release-help.txt
+
       - name: Compute asset name
         id: asset
         shell: bash
-        run: echo "name=battlezone-${GITHUB_REF_NAME}-${{ matrix.target }}.${{ matrix.asset_ext }}" >> "$GITHUB_OUTPUT"
+        env:
+          RELEASE_TARGET: ${{ matrix.target }}
+          ASSET_EXT: ${{ matrix.asset_ext }}
+        run: printf 'name=battlezone-%s-%s.%s\n' "$RELEASE_TAG" "$RELEASE_TARGET" "$ASSET_EXT" >> "$GITHUB_OUTPUT"
 
-      - name: Package Unix archive
-        if: runner.os != 'Windows'
+      - name: Package macOS archive
+        if: runner.os == 'macOS'
         shell: bash
+        env:
+          ASSET_NAME: ${{ steps.asset.outputs.name }}
+          RELEASE_TARGET: ${{ matrix.target }}
         run: |
           set -euo pipefail
-          mkdir -p dist
-          tar -C "target/${{ matrix.target }}/release" -czf "dist/${{ steps.asset.outputs.name }}" "${{ matrix.binary_name }}"
+          mkdir -p dist package
+          cp "target/$RELEASE_TARGET/release/battlezone" package/
+          cp README.md RELEASING.md package/
+          tar -C package -czf "dist/$ASSET_NAME" battlezone README.md RELEASING.md
+          mkdir unpacked
+          tar -xzf "dist/$ASSET_NAME" -C unpacked
+          test "$(unpacked/battlezone --version)" = "battlezone ${RELEASE_TAG#v}"
 
-      - name: Package Windows executable
+      - name: Package Windows archive
         if: runner.os == 'Windows'
         shell: pwsh
+        env:
+          ASSET_NAME: ${{ steps.asset.outputs.name }}
+          RELEASE_TARGET: ${{ matrix.target }}
         run: |
-          New-Item -ItemType Directory -Force -Path dist | Out-Null
-          Copy-Item "target\${{ matrix.target }}\release\${{ matrix.binary_name }}" "dist\${{ steps.asset.outputs.name }}"
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Force -Path dist, package | Out-Null
+          Copy-Item "target/$env:RELEASE_TARGET/release/battlezone.exe" package/
+          Copy-Item README.md, RELEASING.md package/
+          Compress-Archive -Path package/battlezone.exe, package/README.md, package/RELEASING.md -DestinationPath "dist/$env:ASSET_NAME"
+          Expand-Archive -Path "dist/$env:ASSET_NAME" -DestinationPath unpacked
+          $version = & ./unpacked/battlezone.exe --version
+          if ($LASTEXITCODE -ne 0 -or $version -ne "battlezone $($env:RELEASE_TAG.TrimStart('v'))") {
+            throw "Packaged Windows executable failed its version check"
+          }
 
       - name: Upload packaged binary
         uses: actions/upload-artifact@v7
@@ -85,9 +127,9 @@ jobs:
   release:
     name: Publish GitHub Release
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     needs: build
     permissions:
-      actions: read
       contents: write
     env:
       GH_REPO: ${{ github.repository }}
@@ -96,29 +138,29 @@ jobs:
       - name: Download packaged binaries
         uses: actions/download-artifact@v8
         with:
+          pattern: battlezone-*
           path: dist
+          merge-multiple: true
 
       - name: Create or update release
         shell: bash
         run: |
           set -euo pipefail
-          tag="${GITHUB_REF_NAME}"
-          mapfile -t assets < <(find dist -type f | sort)
-
-          if [ "${#assets[@]}" -eq 0 ]; then
-            echo "No release assets were downloaded" >&2
-            exit 1
-          fi
-
-          checksum_file="dist/battlezone-${tag}-SHA256SUMS.txt"
-          : > "$checksum_file"
+          cd dist
+          assets=(
+            "battlezone-${RELEASE_TAG}-aarch64-apple-darwin.tar.gz"
+            "battlezone-${RELEASE_TAG}-x86_64-pc-windows-msvc.zip"
+          )
           for asset in "${assets[@]}"; do
-            printf "%s  %s\n" "$(sha256sum "$asset" | cut -d' ' -f1)" "$(basename "$asset")" >> "$checksum_file"
+            test -s "$asset"
           done
+          checksum_file="battlezone-${RELEASE_TAG}-SHA256SUMS.txt"
+          sha256sum "${assets[@]}" > "$checksum_file"
+          sha256sum --check "$checksum_file"
           assets+=("$checksum_file")
 
-          if gh release view "$tag" >/dev/null 2>&1; then
-            gh release upload "$tag" "${assets[@]}" --clobber
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" "${assets[@]}" --clobber
           else
-            gh release create "$tag" "${assets[@]}" --verify-tag --generate-notes
+            gh release create "$RELEASE_TAG" "${assets[@]}" --verify-tag --generate-notes
           fi

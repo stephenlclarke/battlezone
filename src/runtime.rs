@@ -86,7 +86,15 @@ impl GameRuntime {
         let handle = thread::Builder::new()
             .name(String::from("battlezone-game"))
             .spawn(move || {
-                RuntimeWorker::new(command_rx, worker_scenes, event_proxy, size, game).run()
+                RuntimeWorker::new(
+                    command_rx,
+                    worker_scenes,
+                    event_proxy,
+                    size,
+                    game,
+                    AudioManager::new(),
+                )
+                .run()
             })
             .context("spawning Battlezone game thread")?;
 
@@ -170,6 +178,7 @@ where
         event_sink: S,
         size: ViewportSize,
         mut game: Game,
+        audio: AudioManager,
     ) -> Self {
         game.set_viewport(size.width, size.height);
 
@@ -178,7 +187,7 @@ where
             scenes,
             event_sink,
             game,
-            audio: AudioManager::new(),
+            audio,
             input_tracker: InputTracker::new(),
         }
     }
@@ -509,6 +518,7 @@ mod tests {
             event_tx,
             size,
             Game::with_seed(99),
+            AudioManager::silent(),
         );
         (worker, command_tx, event_rx, scenes)
     }
