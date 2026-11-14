@@ -1,6 +1,8 @@
 # Releases
 
-Battlezone uses winit and wgpu for native window presentation. Interactive play builds vector meshes and draws them directly with wgpu. A separate CPU raster renderer supports headless media generation and tests. There is no Kitty backend. Version 1.1.0 is the first tagged wgpu release; v1.0.0 is the historical terminal release.
+Battlezone uses winit and wgpu for native window presentation. Interactive play builds vector meshes and draws them directly with wgpu. A separate CPU raster renderer supports headless media generation and tests. There is no Kitty backend. Version 1.1.1 is the first published wgpu release; v1.0.0 is the historical terminal release.
+
+The earlier v1.1.0 tag failed Windows test validation and did not publish a GitHub Release. It is retained as failed-build history; tags are not moved.
 
 ## Published downloads
 
@@ -18,11 +20,11 @@ The macOS executable is not a .app bundle. The workflow does not apply Developer
 1. Finish the change on `develop`. Update the package version in Cargo.toml and refresh Cargo.lock with `cargo check --offline`. The tag must be exactly `v` followed by the package version, using three numeric components.
 2. Update README.md, this guide, and any affected runtime or installation docs. Check the Homebrew formula separately if its source pin or test expectations need changing.
 3. Run `make ci`, `make workflows`, and Markdown lint. CI also tests macOS ARM64, Windows x86-64, and Linux. Complete live window checks for rendering/input changes; CLI checks do not prove GPU presentation.
-4. Commit and push the tested source. Tag the exact commit that should be released, then push that tag. For example, when Cargo.toml contains version 1.1.0:
+4. Commit and push the tested source. Tag the exact commit that should be released, then push that tag. For example, when Cargo.toml contains version 1.1.1:
 
 ```sh
-git tag -a v1.1.0 -m "Battlezone 1.1.0"
-git push origin v1.1.0
+git tag -a v1.1.1 -m "Battlezone 1.1.1"
+git push origin v1.1.1
 ```
 
 The workflow builds the tagged commit, even when the tag was made on develop. It does not merge develop into main. Do not move or reuse an existing release tag for different source.
@@ -35,10 +37,10 @@ Only after both native jobs pass does the publication job download their artifac
 
 ## Retry an existing tag
 
-Once the workflow is integrated into the default branch, use **Actions > Release > Run workflow**, select a branch containing the current workflow, and enter the existing tag (for example `v1.1.0`). Alternatively:
+Once the workflow is integrated into the default branch, use **Actions > Release > Run workflow**, select a branch containing the current workflow, and enter the existing tag (for example `v1.1.1`). Alternatively:
 
 ```sh
-gh workflow run release.yml --ref develop -f tag=v1.1.0
+gh workflow run release.yml --ref develop -f tag=v1.1.1
 ```
 
 Before default-branch integration, use the existing tag-triggered run's **Re-run jobs** action (or `gh run rerun <run-id>`).

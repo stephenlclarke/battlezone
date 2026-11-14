@@ -56,17 +56,17 @@ Run `cargo run` or `make run` to open the Battlezone window. A graphical desktop
 
 ### Download a binary
 
-Download the matching archive from [GitHub Releases](https://github.com/stephenlclarke/battlezone/releases). Release v1.1.0 is the first tagged wgpu version. Rust, Cargo, ROMs, and external asset files are not required for these downloads.
+Download the matching archive from [GitHub Releases](https://github.com/stephenlclarke/battlezone/releases). Release v1.1.1 is the first published wgpu version. Rust, Cargo, ROMs, and external asset files are not required for these downloads.
 
 | Platform | Release asset |
 | --- | --- |
-| macOS on Apple silicon (ARM64) | `battlezone-v1.1.0-aarch64-apple-darwin.tar.gz` |
-| Windows on Intel/AMD (x86-64, 64-bit) | `battlezone-v1.1.0-x86_64-pc-windows-msvc.zip` |
-| SHA-256 checksums | `battlezone-v1.1.0-SHA256SUMS.txt` |
+| macOS on Apple silicon (ARM64) | `battlezone-v1.1.1-aarch64-apple-darwin.tar.gz` |
+| Windows on Intel/AMD (x86-64, 64-bit) | `battlezone-v1.1.1-x86_64-pc-windows-msvc.zip` |
+| SHA-256 checksums | `battlezone-v1.1.1-SHA256SUMS.txt` |
 
 On macOS, extract the archive and run `./battlezone` in Terminal from the extracted directory. On Windows, use **Extract All**, then run `battlezone.exe`; from PowerShell in that directory use `.\battlezone.exe`. Both archives include this README and the release guide. The Mac download is an executable, not an app bundle. Releases are not Developer ID notarized or Windows Authenticode signed.
 
-Download the checksum manifest from the same release. On macOS, compare `shasum -a 256 <archive>` with its entry in the manifest. On Windows, use `Get-FileHash .\battlezone-v1.1.0-x86_64-pc-windows-msvc.zip -Algorithm SHA256` in PowerShell.
+Download the checksum manifest from the same release. On macOS, compare `shasum -a 256 <archive>` with its entry in the manifest. On Windows, use `Get-FileHash .\battlezone-v1.1.1-x86_64-pc-windows-msvc.zip -Algorithm SHA256` in PowerShell.
 
 A graphical desktop, compatible GPU, and installed graphics driver are required for interactive play. Windows means x86-64 here; 32-bit Windows and Windows ARM64 binaries are not published. Linux remains available from source or Homebrew.
 
@@ -90,7 +90,7 @@ Alternatively, install directly from git with Cargo:
 cargo install --locked --git https://github.com/stephenlclarke/battlezone --branch develop battlezone
 ```
 
-The Homebrew stable formula installs the checksum-verified wgpu source at commit `457237526a80061a9469f227b98cad090616c44d` as `1.0.0_1`. Both Cargo above and `brew install --HEAD stephenlclarke/tap/battlezone` follow `develop` rather than a release tag. That pinned Homebrew build reports `1.0.0`; current source and the new release report `1.1.0`. Use `brew list --versions battlezone` to see the Homebrew revision. The tap is maintained separately and does not automatically change when a release tag is pushed.
+The Homebrew stable formula installs the checksum-verified wgpu source at commit `457237526a80061a9469f227b98cad090616c44d` as `1.0.0_1`. Both Cargo above and `brew install --HEAD stephenlclarke/tap/battlezone` follow `develop` rather than a release tag. That pinned Homebrew build reports `1.0.0`; current source and the new release report `1.1.1`. Use `brew list --versions battlezone` to see the Homebrew revision. The tap is maintained separately and does not automatically change when a release tag is pushed.
 
 `cargo install` builds with Cargo's release profile by default. Do not pass `--debug` unless you explicitly want a slower debug build.
 
@@ -112,7 +112,7 @@ Rust and Cargo are required. On Debian/Ubuntu, install `libasound2-dev` before b
 
 The [Release workflow](.github/workflows/release.yml) builds the tagged source on native macOS ARM64 and Windows x86-64 runners. It runs tests, builds with `--locked --release`, checks that `--version` matches the tag and `--help` identifies wgpu, and checks each extracted archive before publishing. Both platform builds must pass before either download is published. GitHub Releases contains the two archives and a `battlezone-<tag>-SHA256SUMS.txt` manifest; Actions artifacts are intermediate build outputs.
 
-Version `v1.0.0` is the historical Kitty release. Use `v1.1.0` or later for native window play. New releases publish only the two platforms listed above; the old release's Linux binaries remain historical downloads.
+Version `v1.0.0` is the historical Kitty release. Use `v1.1.1` or later for native window play. New releases publish only the two platforms listed above; the old release's Linux binaries remain historical downloads.
 
 For maintainer steps and rerunning an existing tag, see [RELEASING.md](RELEASING.md).
 
